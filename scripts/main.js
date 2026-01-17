@@ -5301,10 +5301,64 @@ async function callLLM(prompt, apiKey, endpoint, model = "gpt-4o") {
             }
 
             const responseData = await response.json();
-            const messageContent = responseData.choices?.[0]?.message?.content;
+
+            // Support multiple LLM API response formats
+            let messageContent = null;
+
+            // OpenAI / OpenRouter / LM Studio format
+            if (responseData.choices?.[0]?.message?.content) {
+                messageContent = responseData.choices[0].message.content;
+            }
+            // OpenAI format with text instead of content
+            else if (responseData.choices?.[0]?.text) {
+                messageContent = responseData.choices[0].text;
+            }
+            // Anthropic Claude API format
+            else if (responseData.content?.[0]?.text) {
+                messageContent = responseData.content[0].text;
+            }
+            // Anthropic Claude API format (direct text)
+            else if (responseData.content && typeof responseData.content === 'string') {
+                messageContent = responseData.content;
+            }
+            // Ollama format
+            else if (responseData.message?.content) {
+                messageContent = responseData.message.content;
+            }
+            // Ollama /api/generate format
+            else if (responseData.response) {
+                messageContent = responseData.response;
+            }
+            // Text Generation Web UI format
+            else if (responseData.results?.[0]?.text) {
+                messageContent = responseData.results[0].text;
+            }
+            // Kobold AI format
+            else if (responseData.results?.[0]?.generated_text) {
+                messageContent = responseData.results[0].generated_text;
+            }
+            // Google Gemini / Vertex AI format
+            else if (responseData.candidates?.[0]?.content?.parts?.[0]?.text) {
+                messageContent = responseData.candidates[0].content.parts[0].text;
+            }
+            // Cohere format
+            else if (responseData.generations?.[0]?.text) {
+                messageContent = responseData.generations[0].text;
+            }
+            // Generic fallback: look for common text fields
+            else if (responseData.output) {
+                messageContent = typeof responseData.output === 'string' ? responseData.output : JSON.stringify(responseData.output);
+            }
+            else if (responseData.text) {
+                messageContent = responseData.text;
+            }
+            else if (responseData.generated_text) {
+                messageContent = responseData.generated_text;
+            }
 
             if (!messageContent) {
-                console.warn("PF2e AI Combat Assistant | LLM response successful, but no message content found:", responseData);
+                console.warn("PF2e AI Combat Assistant | LLM response successful, but no message content found. Response structure:", JSON.stringify(responseData, null, 2).substring(0, 1000));
+                console.warn("PF2e AI Combat Assistant | Supported formats: OpenAI (choices[0].message.content), Anthropic (content[0].text), Ollama (message.content or response), Google (candidates[0].content.parts[0].text), Cohere (generations[0].text)");
                 return null;
             }
             return messageContent.trim();
