@@ -9,6 +9,18 @@ console.log("PF2e AI Combat Assistant | Module Loading (v1.07)");
 
 const MODULE_ID = 'pf2e-ai-combat-assistant'; // Unique identifier for the module
 
+// Debug flag - set to false to disable verbose console logging for performance
+const DEBUG = false;
+
+// Tactical preset options for AI behavior
+const TACTICAL_PRESETS = {
+    AGGRESSIVE: 'aggressive',   // Prioritize damage, take calculated risks, close distance
+    DEFENSIVE: 'defensive',     // Preserve HP, use shields/defensive actions, maintain distance
+    CONTROL: 'control',         // Focus on debuffs, crowd control, disabling key enemies
+    SUPPORT: 'support',         // Heal/buff allies, manage positioning, protect wounded
+    DEFAULT: 'default'          // No specific preset, let AI decide based on situation
+};
+
 // Flags used to store data on actors and combat
 const FLAGS = {
     DESIGNATIONS: 'designations',           // Stores friendly/enemy status (on Combat)
@@ -19,6 +31,7 @@ const FLAGS = {
     TEMP_THINKING: 'pf2eArenaAi_tempThinking', // Temporary flag for deleting "Thinking..." messages (on ChatMessage)
     MANUAL_NOTES_INPUT_ID: 'manualNotesInputId', // Unique ID for manual input field (on ChatMessage)
     PERMANENT_NOTES: 'permanentNotes',         // Stores permanent player notes for the AI (on Actor)
+    TACTICAL_PRESET: 'tacticalPreset',         // Stores tactical behavior preset (on Actor)
 };
 
 // --- Hooks ---
@@ -235,6 +248,103 @@ function shouldExcludeDescription(fullDescription, abilityName, absoluteMaxLengt
     }
 
     return false; // Otherwise, include the description
+}
+
+/**
+ * Calculates the threat level of an actor based on their current HP percentage.
+ * Used for visual threat assessment badges in suggestion cards.
+ * @param {Actor} actor - The actor to assess.
+ * @returns {object} An object with level ('healthy'|'wounded'|'critical'|'dying'|'unknown'),
+ *                   label (localized display text), and cssClass for styling.
+ */
+function getThreatLevel(actor) {
+    if (!actor || !actor.system?.attributes?.hp) {
+        return { level: 'unknown', label: '?', cssClass: 'ai-threat-unknown' };
+    }
+
+    const hp = actor.system.attributes.hp;
+    const currentHp = hp.value ?? 0;
+    const maxHp = hp.max ?? 1;
+
+    // Check for dying/unconscious status
+    if (currentHp <= 0 || actor.hasCondition?.('dying') || actor.hasCondition?.('unconscious')) {
+        return { level: 'dying', label: game.i18n.localize(`${MODULE_ID}.threat.dying`) || 'Dying', cssClass: 'ai-threat-dying' };
+    }
+
+    const hpPercent = (currentHp / maxHp) * 100;
+
+    if (hpPercent > 66) {
+        return { level: 'healthy', label: game.i18n.localize(`${MODULE_ID}.threat.healthy`) || 'Healthy', cssClass: 'ai-threat-healthy' };
+    } else if (hpPercent > 33) {
+        return { level: 'wounded', label: game.i18n.localize(`${MODULE_ID}.threat.wounded`) || 'Wounded', cssClass: 'ai-threat-wounded' };
+    } else {
+        return { level: 'critical', label: game.i18n.localize(`${MODULE_ID}.threat.critical`) || 'Critical', cssClass: 'ai-threat-critical' };
+    }
+}
+
+/**
+ * Gets the tactical preset for an actor, falling back to the default setting if none is set.
+ * @param {Actor} actor - The actor to get the preset for.
+ * @returns {string} The tactical preset value.
+ */
+function getTacticalPreset(actor) {
+    if (!actor) return TACTICAL_PRESETS.DEFAULT;
+
+    const actorPreset = actor.getFlag(MODULE_ID, FLAGS.TACTICAL_PRESET);
+    if (actorPreset && Object.values(TACTICAL_PRESETS).includes(actorPreset)) {
+        return actorPreset;
+    }
+
+    // Fall back to default setting
+    try {
+        return game.settings.get(MODULE_ID, 'defaultTacticalPreset') || TACTICAL_PRESETS.DEFAULT;
+    } catch (e) {
+        return TACTICAL_PRESETS.DEFAULT;
+    }
+}
+
+/**
+ * Gets the tactical context string to include in the AI prompt based on the preset.
+ * @param {string} preset - The tactical preset value.
+ * @returns {string} The tactical context instructions for the prompt.
+ */
+function getTacticalContextForPrompt(preset) {
+    switch (preset) {
+        case TACTICAL_PRESETS.AGGRESSIVE:
+            return `**TACTICAL DIRECTIVE: AGGRESSIVE**
+- Prioritize dealing maximum damage to enemies
+- Take calculated risks to close distance and engage
+- Focus on offensive abilities and attacks over defensive options
+- Target the most dangerous or wounded enemies first
+- Use powerful abilities even if they have drawbacks`;
+
+        case TACTICAL_PRESETS.DEFENSIVE:
+            return `**TACTICAL DIRECTIVE: DEFENSIVE**
+- Prioritize preserving hit points and avoiding damage
+- Use defensive actions like Raise Shield, Take Cover, or defensive stances
+- Maintain safe distance from dangerous enemies when possible
+- Prioritize healing and recovery when wounded
+- Retreat or reposition when significantly damaged`;
+
+        case TACTICAL_PRESETS.CONTROL:
+            return `**TACTICAL DIRECTIVE: CONTROL**
+- Focus on debuffing enemies and crowd control effects
+- Prioritize abilities that impose conditions (frightened, stunned, slowed, etc.)
+- Target enemies that pose the greatest threat to allies
+- Use area effects to affect multiple enemies when possible
+- Disable key enemies before they can act`;
+
+        case TACTICAL_PRESETS.SUPPORT:
+            return `**TACTICAL DIRECTIVE: SUPPORT**
+- Prioritize healing wounded allies and removing harmful conditions
+- Use buff abilities to enhance ally effectiveness
+- Protect critically wounded allies with positioning or abilities
+- Focus on enabling allies rather than dealing damage directly
+- Maintain awareness of ally positions and health states`;
+
+        default:
+            return ''; // No specific tactical directive
+    }
 }
 
 /**
@@ -2707,10 +2817,19 @@ if (turnState.actionsRemaining === 0) {
         }
         // --- End Auto-Targeting Logic ---
 
+        // --- Generate Threat Badge for Target ---
+        let threatBadgeHTML = '';
+        if (targetToken && targetToken.actor) {
+            const threatInfo = getThreatLevel(targetToken.actor);
+            if (threatInfo.level !== 'unknown') {
+                threatBadgeHTML = `<span class="ai-threat-badge ${threatInfo.cssClass}" title="${threatInfo.label}">${threatInfo.label}</span>`;
+            }
+        }
+        // --- End Threat Badge ---
 
         const finalContent = `
              <div style="margin-bottom: 5px;">
-                 ${actionIconsHTML} <strong>${parsedSuggestion.description}</strong> ${effectiveTargetString ? `<i>(Target: ${effectiveTargetString.replace(/ \[ID:\s*[^\]]+\]/i, '')})</i>` : ''}
+                 ${actionIconsHTML} <strong>${parsedSuggestion.description}</strong> ${effectiveTargetString ? `<i>(Target: ${effectiveTargetString.replace(/ \[ID:\s*[^\]]+\]/i, '')})</i> ${threatBadgeHTML}` : ''}
                  <div class="ai-action-counter" style="font-size: 0.9em; color: #666; margin-top: 2px;">(${currentTurnStateForDisplay.actionsRemaining} actions remaining this turn)</div>
                  ${(() => {
                      const stunnedVal = currentTurnStateForDisplay.stunnedValueAtStart ?? 0;
@@ -4907,6 +5026,10 @@ function craftSingleActionPrompt(combatant, gameState, turnState, skippedAction 
     const contextualInfoString = contextualInfo.length > 0 ? `\n**Contextual Reminders & Key Rules:**\n${contextualInfo.join('\n')}\n` : '';
     // --- End Contextual Reminders ---
  
+    // Get tactical preset and context for this actor
+    const tacticalPreset = getTacticalPreset(actor);
+    const tacticalContext = getTacticalContextForPrompt(tacticalPreset);
+
     // Assemble Prompt Sections
     let promptSections = [];
     promptSections.push(`
@@ -4916,7 +5039,10 @@ ${gameState.self.permanentNotes ? `
 ${gameState.self.permanentNotes.trim()}
 **------------------------------------**
 ` : ''}
-${contextualInfoString}
+${tacticalContext ? `
+${tacticalContext}
+
+` : ''}${contextualInfoString}
 
 You have ${turnState.actionsRemaining} actions remaining. Your current Multiple Attack Penalty (MAP) is ${mapDisplayString}.
 ${(() => {
@@ -5096,57 +5222,133 @@ ${eventsList}
 }
 
 
-// `callLLM`: Calls the API.
+// `callLLM`: Calls the API with timeout and retry logic.
 async function callLLM(prompt, apiKey, endpoint, model = "gpt-4o") {
-    // console.debug(`PF2e AI Combat Assistant | --- Calling LLM API (${model}) ---`); // DEBUG
+    if (DEBUG) console.debug(`PF2e AI Combat Assistant | --- Calling LLM API (${model}) ---`);
     if (!prompt || !apiKey || !endpoint || !model) {
         console.error("PF2e AI Combat Assistant | LLM call aborted: Missing parameters (prompt, apiKey, endpoint, or model).");
         ui.notifications.error("AI Assistant: LLM call aborted due to missing configuration. Check module settings and console (F12).", { permanent: true });
         return null;
     }
-    console.log(`PF2e AI Combat Assistant | Sending prompt to ${model} at ${endpoint}. Prompt length: ${prompt.length}`); // Log prompt length
+
+    // Get configurable settings
+    let temperature = 0.6;
     try {
-        const response = await fetch(endpoint, {
-            method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
-            body: JSON.stringify({ model: model, messages: [{ role: "user", content: prompt }], temperature: 0.6, max_tokens: 180, stop: null }) // Note: max_tokens might be low for some models/tasks
-        });
+        temperature = game.settings.get(MODULE_ID, 'llmTemperature') ?? 0.6;
+    } catch (e) { /* Use default if setting not registered yet */ }
 
-        if (!response.ok) {
-            let errorBodyText = `Status: ${response.status} ${response.statusText}`;
-            try {
-                const body = await response.text();
-                errorBodyText += `. Body: ${body.substring(0, 500)}${body.length > 500 ? '...' : ''}`; // Limit logged body length
-            } catch (bodyError) {
-                errorBodyText += ` (Could not read error response body: ${bodyError})`;
+    const MAX_RETRIES = 3;
+    const TIMEOUT_MS = 30000; // 30 second timeout
+    const RETRY_DELAYS = [1000, 2000, 4000]; // Exponential backoff: 1s, 2s, 4s
+
+    console.log(`PF2e AI Combat Assistant | Sending prompt to ${model} at ${endpoint}. Prompt length: ${prompt.length}`);
+
+    let lastError = null;
+
+    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+        // Create AbortController for timeout
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS);
+
+        try {
+            if (attempt > 0) {
+                console.log(`PF2e AI Combat Assistant | Retry attempt ${attempt + 1}/${MAX_RETRIES}...`);
             }
-            console.error(`PF2e AI Combat Assistant | LLM API HTTP Error: ${errorBodyText}`);
-            throw new Error(`LLM API Error (${response.status}). Check console (F12) for details.`); // Throw a user-friendlier message
+
+            const response = await fetch(endpoint, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${apiKey}`,
+                    'HTTP-Referer': 'https://foundryvtt.com/',
+                    'X-Title': 'PF2e AI Combat Assistant'
+                },
+                body: JSON.stringify({
+                    model: model,
+                    messages: [{ role: "user", content: prompt }],
+                    temperature: temperature,
+                    max_tokens: 500, // Increased from 180 to prevent truncation
+                    stop: null
+                }),
+                signal: controller.signal
+            });
+
+            clearTimeout(timeoutId);
+
+            if (!response.ok) {
+                let errorBodyText = `Status: ${response.status} ${response.statusText}`;
+                try {
+                    const body = await response.text();
+                    errorBodyText += `. Body: ${body.substring(0, 500)}${body.length > 500 ? '...' : ''}`;
+                } catch (bodyError) {
+                    errorBodyText += ` (Could not read error response body: ${bodyError})`;
+                }
+                console.error(`PF2e AI Combat Assistant | LLM API HTTP Error: ${errorBodyText}`);
+
+                // Don't retry on 4xx errors (client errors like auth failures)
+                if (response.status >= 400 && response.status < 500) {
+                    throw new Error(`LLM API Error (${response.status}). Check console (F12) for details.`);
+                }
+
+                // Retry on 5xx errors (server errors)
+                lastError = new Error(`LLM API Error (${response.status})`);
+                if (attempt < MAX_RETRIES - 1) {
+                    console.log(`PF2e AI Combat Assistant | Server error, waiting ${RETRY_DELAYS[attempt]}ms before retry...`);
+                    await new Promise(resolve => setTimeout(resolve, RETRY_DELAYS[attempt]));
+                    continue;
+                }
+                throw lastError;
+            }
+
+            const responseData = await response.json();
+            const messageContent = responseData.choices?.[0]?.message?.content;
+
+            if (!messageContent) {
+                console.warn("PF2e AI Combat Assistant | LLM response successful, but no message content found:", responseData);
+                return null;
+            }
+            return messageContent.trim();
+
+        } catch (error) {
+            clearTimeout(timeoutId);
+
+            // Handle abort/timeout specifically
+            if (error.name === 'AbortError') {
+                console.error(`PF2e AI Combat Assistant | LLM API call timed out after ${TIMEOUT_MS / 1000}s.`);
+                lastError = new Error(`LLM request timed out after ${TIMEOUT_MS / 1000} seconds`);
+
+                if (attempt < MAX_RETRIES - 1) {
+                    console.log(`PF2e AI Combat Assistant | Timeout occurred, waiting ${RETRY_DELAYS[attempt]}ms before retry...`);
+                    await new Promise(resolve => setTimeout(resolve, RETRY_DELAYS[attempt]));
+                    continue;
+                }
+            } else if (error.message?.includes('Failed to fetch') || error.message?.includes('NetworkError')) {
+                // Network errors should be retried
+                lastError = error;
+                if (attempt < MAX_RETRIES - 1) {
+                    console.log(`PF2e AI Combat Assistant | Network error, waiting ${RETRY_DELAYS[attempt]}ms before retry...`);
+                    await new Promise(resolve => setTimeout(resolve, RETRY_DELAYS[attempt]));
+                    continue;
+                }
+            } else {
+                // Other errors (e.g., 4xx) should not be retried
+                lastError = error;
+            }
+
+            // Final error logging after all retries exhausted
+            console.error(`PF2e AI Combat Assistant | Error during LLM API call (after ${attempt + 1} attempt(s)).`);
+            console.error(`> Endpoint: ${endpoint}`);
+            console.error(`> Model: ${model}`);
+            console.error(`> Prompt Length: ${prompt?.length ?? 'N/A'}`);
+            console.error(`> Error Details:`, error);
+
+            ui.notifications.error(`AI Assistant: Error communicating with the LLM after ${attempt + 1} attempt(s). Check the console (F12) for details.`, { permanent: true });
+            throw lastError || error;
         }
-
-        const responseData = await response.json();
-        const messageContent = responseData.choices?.[0]?.message?.content;
-
-        if (!messageContent) {
-            console.warn("PF2e AI Combat Assistant | LLM response successful, but no message content found:", responseData);
-            // Optionally notify user about empty response
-            // ui.notifications.warn("AI Assistant: Received an empty response from the LLM.");
-            return null;
-        }
-        return messageContent.trim();
-
-    } catch (error) {
-        // Log more detailed error information
-        console.error(`PF2e AI Combat Assistant | Error during LLM API call.`);
-        console.error(`> Endpoint: ${endpoint}`);
-        console.error(`> Model: ${model}`);
-        console.error(`> Prompt Length: ${prompt?.length ?? 'N/A'}`);
-        console.error(`> Error Details:`, error); // Log the full error object
-
-        // User-facing notification
-        ui.notifications.error(`AI Assistant: Error communicating with the LLM. Check the console (F12) for details. Common issues: incorrect API key/endpoint/model, network problems, or insufficient token context length.`, { permanent: true });
-
-        throw error; // Re-throw so the calling function knows it failed
     }
+
+    // Should not reach here, but just in case
+    throw lastError || new Error('LLM call failed after all retries');
 }
 
 // `parseLLMSuggestion`: Parses LLM response.
@@ -5744,9 +5946,9 @@ function registerSettings() {
     }
     // console.log("PF2e AI Combat Assistant | Registering settings..."); // DEBUG
     console.log("PF2e AI Combat Assistant | Registering module settings...");
-    game.settings.register(MODULE_ID, 'apiKey', { name: 'LLM API Key', hint: 'Required API key for the LLM service (e.g., OpenAI). Keep this secret!', scope: 'world', config: true, type: String, default: '' });
-    game.settings.register(MODULE_ID, 'llmEndpoint', { name: 'LLM API Endpoint URL', hint: 'URL for the chat completion API (e.g., OpenAI, local endpoint).', scope: 'world', config: true, type: String, default: 'https://api.openai.com/v1/chat/completions' });
-    game.settings.register(MODULE_ID, 'aiModel', { name: 'LLM Model Name', hint: 'The specific model identifier to use (e.g., gpt-4o, gpt-3.5-turbo, local model ID).', scope: 'world', config: true, type: String, default: 'gpt-4o' });
+    game.settings.register(MODULE_ID, 'apiKey', { name: game.i18n.localize(`${MODULE_ID}.settings.apiKey.name`), hint: game.i18n.localize(`${MODULE_ID}.settings.apiKey.hint`), scope: 'world', config: true, type: String, default: '' });
+    game.settings.register(MODULE_ID, 'llmEndpoint', { name: game.i18n.localize(`${MODULE_ID}.settings.llmEndpoint.name`), hint: game.i18n.localize(`${MODULE_ID}.settings.llmEndpoint.hint`), scope: 'world', config: true, type: String, default: 'https://openrouter.ai/api/v1/chat/completions' });
+    game.settings.register(MODULE_ID, 'aiModel', { name: game.i18n.localize(`${MODULE_ID}.settings.aiModel.name`), hint: game.i18n.localize(`${MODULE_ID}.settings.aiModel.hint`), scope: 'world', config: true, type: String, default: 'google/gemini-2.5-pro-preview' });
     game.settings.register(MODULE_ID, 'showOfferToPlayers', { name: 'Show AI Offer/Suggestions to Players?', hint: 'If checked, players who own the current actor (or all players if no owner) will see the AI turn offer and suggestion messages. If unchecked, only the GM sees these messages.', scope: 'world', config: true, type: Boolean, default: false });
     game.settings.register(MODULE_ID, 'includeReactionsInPrompt', { name: "Include Reactions in Prompt", hint: "Include Reaction abilities in the list sent to the AI for consideration.", scope: "world", config: true, type: Boolean, default: true });
 
@@ -5759,6 +5961,36 @@ function registerSettings() {
         type: Boolean,
         default: false, // Default to public messages
         requiresReload: false // No reload needed
+    });
+
+    // Setting: LLM Temperature
+    game.settings.register(MODULE_ID, 'llmTemperature', {
+        name: game.i18n.localize(`${MODULE_ID}.settings.llmTemperature.name`),
+        hint: game.i18n.localize(`${MODULE_ID}.settings.llmTemperature.hint`),
+        scope: 'world',
+        config: true,
+        type: Number,
+        range: { min: 0, max: 1, step: 0.1 },
+        default: 0.6,
+        requiresReload: false
+    });
+
+    // Setting: Default Tactical Preset
+    game.settings.register(MODULE_ID, 'defaultTacticalPreset', {
+        name: game.i18n.localize(`${MODULE_ID}.settings.defaultTacticalPreset.name`),
+        hint: game.i18n.localize(`${MODULE_ID}.settings.defaultTacticalPreset.hint`),
+        scope: 'world',
+        config: true,
+        type: String,
+        choices: {
+            [TACTICAL_PRESETS.DEFAULT]: game.i18n.localize(`${MODULE_ID}.presets.default`),
+            [TACTICAL_PRESETS.AGGRESSIVE]: game.i18n.localize(`${MODULE_ID}.presets.aggressive`),
+            [TACTICAL_PRESETS.DEFENSIVE]: game.i18n.localize(`${MODULE_ID}.presets.defensive`),
+            [TACTICAL_PRESETS.CONTROL]: game.i18n.localize(`${MODULE_ID}.presets.control`),
+            [TACTICAL_PRESETS.SUPPORT]: game.i18n.localize(`${MODULE_ID}.presets.support`)
+        },
+        default: TACTICAL_PRESETS.DEFAULT,
+        requiresReload: false
     });
 }
 
@@ -6120,41 +6352,59 @@ Hooks.once('ready', () => { // Keep existing ready hook content
     });
 // Function to open the AI Notes editing dialog
 async function openAINotesDialog(actor) {
-    const MODULE_ID = 'pf2e-ai-combat-assistant'; // Ensure consistency
     const FLAG_KEY = FLAGS.PERMANENT_NOTES;
     const currentNotes = actor.getFlag(MODULE_ID, FLAG_KEY) || '';
+    const currentPreset = actor.getFlag(MODULE_ID, FLAGS.TACTICAL_PRESET) || TACTICAL_PRESETS.DEFAULT;
+
+    // Generate preset options
+    const presetOptions = Object.entries(TACTICAL_PRESETS).map(([key, value]) => {
+        const label = game.i18n.localize(`${MODULE_ID}.presets.${value}`) || value.charAt(0).toUpperCase() + value.slice(1);
+        const selected = currentPreset === value ? 'selected' : '';
+        return `<option value="${value}" ${selected}>${label}</option>`;
+    }).join('');
 
     const content = `
         <form>
             <div class="form-group">
-                <label>Permanent AI Notes:</label>
-                <textarea name="aiNotes" style="width: 98%; min-height: 150px;" placeholder="Enter notes for the AI...">${currentNotes}</textarea>
+                <label>${game.i18n.localize(`${MODULE_ID}.chat.tacticalPresetLabel`) || 'Tactical Preset:'}</label>
+                <select name="tacticalPreset" style="width: 100%; margin-bottom: 10px;">
+                    ${presetOptions}
+                </select>
+                <p class="notes" style="font-size: 0.85em; color: #666; margin-top: 2px; margin-bottom: 10px;">
+                    ${game.i18n.localize(`${MODULE_ID}.chat.tacticalPresetHint`) || 'Controls how the AI prioritizes actions for this character.'}
+                </p>
+            </div>
+            <div class="form-group">
+                <label>${game.i18n.localize(`${MODULE_ID}.chat.aiNotesDialogLabel`) || 'Permanent AI Notes:'}</label>
+                <textarea name="aiNotes" style="width: 98%; min-height: 150px;" placeholder="${game.i18n.localize(`${MODULE_ID}.chat.aiNotesPlaceholder`) || 'Enter notes for the AI...'}">${currentNotes}</textarea>
             </div>
         </form>
     `;
 
     new Dialog({
-        title: `AI Notes for ${actor.name}`,
+        title: game.i18n.format(`${MODULE_ID}.chat.aiNotesDialogTitle`, { actorName: actor.name }) || `AI Notes for ${actor.name}`,
         content: content,
         buttons: {
             save: {
                 icon: '<i class="fas fa-save"></i>',
-                label: "Save",
+                label: game.i18n.localize(`${MODULE_ID}.chat.aiNotesDialogSave`) || "Save",
                 callback: async (html) => {
                     const newNotes = html.find('textarea[name="aiNotes"]').val();
+                    const newPreset = html.find('select[name="tacticalPreset"]').val();
                     try {
                         await actor.setFlag(MODULE_ID, FLAG_KEY, newNotes);
-                        console.log(`PF2e AI Combat Assistant | Saved AI Notes for ${actor.name} via dialog.`);
-                        ui.notifications.info(`AI Notes saved for ${actor.name}.`);
+                        await actor.setFlag(MODULE_ID, FLAGS.TACTICAL_PRESET, newPreset);
+                        console.log(`PF2e AI Combat Assistant | Saved AI Notes and Tactical Preset (${newPreset}) for ${actor.name} via dialog.`);
+                        ui.notifications.info(`AI Notes and Tactical Preset saved for ${actor.name}.`);
                     } catch (err) {
-                        console.error(`PF2e AI Combat Assistant | Error saving AI Notes flag via dialog:`, err);
+                        console.error(`PF2e AI Combat Assistant | Error saving AI Notes/Preset flags via dialog:`, err);
                         ui.notifications.error(`Error saving AI Notes for ${actor.name}.`);
                     }
                 }
             },
             cancel: {
                 icon: '<i class="fas fa-times"></i>',
-                label: "Cancel"
+                label: game.i18n.localize(`${MODULE_ID}.chat.aiNotesDialogCancel`) || "Cancel"
             }
         },
         default: "save"

@@ -3,15 +3,15 @@
         "settings": {
             "apiKey": {
                 "name": "LLM API Key",
-                "hint": "Required API key for the LLM service (e.g., OpenAI). Keep this secret!"
+                "hint": "Required API key for the LLM service (e.g., OpenRouter). Keep this secret!"
             },
             "llmEndpoint": {
                 "name": "LLM API Endpoint URL",
-                "hint": "URL for the chat completion API (e.g., OpenAI, local endpoint)."
+                "hint": "URL for the chat completion API. Default: OpenRouter. Compatible with OpenAI-format endpoints."
             },
             "aiModel": {
                 "name": "LLM Model Name",
-                "hint": "The specific model identifier to use (e.g., gpt-4o, gpt-3.5-turbo, local model ID)."
+                "hint": "The model identifier to use (e.g., google/gemini-2.5-pro-preview, anthropic/claude-sonnet-4, openai/gpt-4o)."
             },
             "showOfferToPlayers": {
                 "name": "Show AI Offer/Suggestions to Players?",
@@ -24,6 +24,14 @@
             "whisperTurnSummary": {
                 "name": "Whisper Turn Summary to GM Only",
                 "hint": "If checked, the end-of-turn summary message will only be visible to the GM. If unchecked, it will be sent publicly."
+            },
+            "llmTemperature": {
+                "name": "LLM Temperature",
+                "hint": "Controls randomness in AI responses. Lower (0.0-0.3) = more focused/deterministic. Higher (0.7-1.0) = more creative/varied. Default: 0.6"
+            },
+            "defaultTacticalPreset": {
+                "name": "Default Tactical Preset",
+                "hint": "The default tactical behavior for actors without a specific preset assigned."
             }
         },
         "chat": {
@@ -54,7 +62,10 @@
             "aiNotesDialogLabel": "Enter notes for the AI to remember about this character's tactics, personality, or goals:",
             "aiNotesDialogSave": "Save Notes",
             "aiNotesDialogCancel": "Cancel",
-            "aiNotesButtonTooltip": "Edit AI Permanent Notes"
+            "aiNotesButtonTooltip": "Edit AI Permanent Notes",
+            "tacticalPresetLabel": "Tactical Preset:",
+            "tacticalPresetHint": "Controls how the AI prioritizes actions for this character.",
+            "aiNotesPlaceholder": "Enter notes for the AI..."
         },
         "combat": {
             "designateTitle": "Assign Designations",
@@ -63,6 +74,20 @@
             "designateSingleFriendly": "Mark Friendly",
             "designateSingleEnemy": "Mark Enemy",
             "designateSingleNeutral": "Mark Neutral"
+        },
+        "presets": {
+            "default": "Default (No Preset)",
+            "aggressive": "Aggressive",
+            "defensive": "Defensive",
+            "control": "Control",
+            "support": "Support"
+        },
+        "threat": {
+            "healthy": "Healthy",
+            "wounded": "Wounded",
+            "critical": "Critical",
+            "dying": "Dying",
+            "unknown": "Unknown"
         }
     }
 }

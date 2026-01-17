@@ -66,3 +66,62 @@
     padding: 2px 5px;
     font-size: 0.9em;
 }
+
+/* Threat Assessment Badges */
+.ai-threat-badge {
+    display: inline-block;
+    padding: 1px 6px;
+    margin-left: 4px;
+    border-radius: 3px;
+    font-size: 0.75em;
+    font-weight: bold;
+    text-transform: uppercase;
+    vertical-align: middle;
+}
+
+.ai-threat-healthy {
+    background-color: #28a745;
+    color: white;
+    border: 1px solid #1e7e34;
+}
+
+.ai-threat-wounded {
+    background-color: #ffc107;
+    color: #212529;
+    border: 1px solid #d39e00;
+}
+
+.ai-threat-critical {
+    background-color: #dc3545;
+    color: white;
+    border: 1px solid #bd2130;
+}
+
+.ai-threat-dying {
+    background-color: #6c757d;
+    color: white;
+    border: 1px solid #545b62;
+}
+
+.ai-threat-unknown {
+    background-color: #868e96;
+    color: white;
+    border: 1px solid #6c757d;
+}
+
+/* Tactical Preset Styling in Dialog */
+.ai-tactical-preset-select {
+    width: 100%;
+    margin-bottom: 10px;
+}
+
+/* Button flash animation for designation toggle */
+@keyframes ai-button-flash {
+    0% { opacity: 1; }
+    50% { opacity: 0.5; }
+    100% { opacity: 1; }
+}
+
+.ai-button-flash {
+    animation: ai-button-flash 0.3s ease-in-out;
+}
