@@ -32,6 +32,39 @@
             "defaultTacticalPreset": {
                 "name": "Default Tactical Preset",
                 "hint": "The default tactical behavior for actors without a specific preset assigned."
+            },
+            "showProbabilityAnalysis": {
+                "name": "Show Hit Probability Analysis",
+                "hint": "Calculate and display hit probability percentages and expected damage for strikes against visible enemies. Helps the AI make smarter attack choices."
+            },
+            "enableFlankingAnalysis": {
+                "name": "Enable Flanking Detection",
+                "hint": "Automatically detect flanking situations and opportunities. Enemies show [FLANKING] or [CAN FLANK] markers when applicable."
+            },
+            "enableCombatMemory": {
+                "name": "Enable Combat Memory",
+                "hint": "Track action outcomes across combat rounds. The AI learns from previous successes and failures to adapt its strategy."
+            },
+            "enableMultiActionPlanning": {
+                "name": "Enable Multi-Action Planning (Experimental)",
+                "hint": "Plan full 3-action turns at once instead of one action at a time. Shows a complete turn plan with contingencies."
+            },
+            "enablePartyCoordination": {
+                "name": "Enable Party Coordination",
+                "hint": "Allow the AI to consider ally actions, coordinate tactics, and suggest complementary strategies when controlling multiple friendly combatants."
+            },
+            "autoAssignPartyRoles": {
+                "name": "Auto-Assign Party Roles",
+                "hint": "Automatically detect and assign tactical roles (Tank, Healer, Striker, Controller, Support, Ranged) to friendly combatants based on their class and abilities."
+            },
+            "partyCoordinationLevel": {
+                "name": "Party Coordination Level",
+                "hint": "How detailed should party coordination suggestions be?",
+                "choices": {
+                    "basic": "Basic - Show ally status only",
+                    "standard": "Standard - Include coordination hints and opportunities",
+                    "advanced": "Advanced - Full tactical analysis with role-based priorities"
+                }
             }
         },
         "chat": {
@@ -88,6 +121,30 @@
             "critical": "Critical",
             "dying": "Dying",
             "unknown": "Unknown"
+        },
+        "roles": {
+            "tank": "Tank",
+            "healer": "Healer",
+            "striker": "Striker",
+            "controller": "Controller",
+            "support": "Support",
+            "ranged": "Ranged",
+            "unknown": "Unknown"
+        },
+        "threatLevels": {
+            "critical": "CRITICAL",
+            "high": "HIGH",
+            "medium": "MEDIUM",
+            "low": "LOW"
+        },
+        "partyCoordination": {
+            "yourRole": "Your Role",
+            "allyStatus": "Ally Status",
+            "allyActions": "Ally Actions This Round",
+            "activeTactics": "Active Tactics",
+            "focusTarget": "FOCUS TARGET",
+            "protectTarget": "PROTECT",
+            "coordinationOpportunities": "Coordination Opportunities"
         }
     }
 }

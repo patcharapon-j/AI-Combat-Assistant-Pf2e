@@ -32,7 +32,1053 @@ const FLAGS = {
     MANUAL_NOTES_INPUT_ID: 'manualNotesInputId', // Unique ID for manual input field (on ChatMessage)
     PERMANENT_NOTES: 'permanentNotes',         // Stores permanent player notes for the AI (on Actor)
     TACTICAL_PRESET: 'tacticalPreset',         // Stores tactical behavior preset (on Actor)
+    COMBAT_MEMORY: 'combatMemory',             // Stores combat memory data (on Combat)
+    ACTION_PLAN: 'actionPlan',                 // Stores multi-action plan (on Actor)
+    // Party Coordination Flags (Phase 2)
+    PARTY_COORDINATION: 'partyCoordination',   // Stores party coordination state (on Combat)
+    PARTY_ROLES: 'partyRoles',                 // Stores assigned party roles (on Combat)
 };
+
+// Party roles for coordination system
+const PARTY_ROLES = {
+    TANK: 'tank',           // Engage threats, protect allies, front line
+    HEALER: 'healer',       // Heal critical/wounded, buff, behind frontline
+    STRIKER: 'striker',     // Focus fire, flank, finish wounded, melee with priority targets
+    CONTROLLER: 'controller', // Disable, area control, debuff, safe distance
+    SUPPORT: 'support',     // Buff, debuff, heal if needed, mid-range
+    RANGED: 'ranged',       // Damage priority targets, support melee, max effective range
+    UNKNOWN: 'unknown'      // Role not yet determined
+};
+
+// Threat level classifications
+const THREAT_LEVELS = {
+    CRITICAL: 'CRITICAL',   // Immediate danger, must address now
+    HIGH: 'HIGH',           // Significant threat, prioritize
+    MEDIUM: 'MEDIUM',       // Notable threat, consider
+    LOW: 'LOW'              // Minor threat, lower priority
+};
+
+// Condition synergy matrix for tactical exploitation
+const CONDITION_SYNERGIES = {
+    'frightened': {
+        stacksWith: ['sickened', 'enfeebled', 'clumsy'],
+        enablesCombos: ['Fear stacking', 'Demoralize follow-up', 'Intimidation builds'],
+        impact: 'Reduces attack rolls, saves, skill checks, and DCs by value',
+        tacticalNote: 'Great setup for save-targeting abilities'
+    },
+    'off-guard': {
+        stacksWith: ['frightened', 'clumsy'],
+        enablesCombos: ['Sneak Attack', 'Precision damage', 'Flanking bonus'],
+        impact: '-2 AC, enables precision damage from rogues/investigators',
+        tacticalNote: 'Priority target for melee strikers'
+    },
+    'grabbed': {
+        impliesConditions: ['off-guard', 'immobilized'],
+        enablesCombos: ['Follow-up strikes', 'Escape denial', 'Grapple chains'],
+        impact: 'Target cannot move, -2 AC (off-guard), can\'t use manipulate actions freely',
+        tacticalNote: 'Excellent control - follow up with strikes or maintain grab'
+    },
+    'restrained': {
+        impliesConditions: ['off-guard', 'immobilized'],
+        enablesCombos: ['Free attacks', 'Spell targeting'],
+        impact: 'Off-guard, immobilized, -2 attack rolls, can\'t use manipulate actions',
+        tacticalNote: 'Superior to grabbed - target is heavily debuffed'
+    },
+    'prone': {
+        stacksWith: ['off-guard'],
+        enablesCombos: ['Melee advantage', 'Ranged penalty on target'],
+        impact: 'Off-guard, -2 attack rolls, must Stand (1 action) to move normally',
+        tacticalNote: '+4 circumstance bonus to melee attacks vs prone, ranged attacks take -2'
+    },
+    'stunned': {
+        impact: 'Loses actions equal to stunned value - extremely high value control',
+        tacticalNote: 'One of the strongest conditions - removes enemy action economy'
+    },
+    'slowed': {
+        stacksWith: ['stunned'],
+        impact: 'Reduces enemy action economy by slowed value each turn',
+        tacticalNote: 'Sustained control effect, excellent vs multi-attack enemies'
+    },
+    'sickened': {
+        stacksWith: ['frightened', 'enfeebled', 'clumsy'],
+        impact: 'Status penalty to all checks and DCs equal to value',
+        tacticalNote: 'Broad debuff affecting saves, attacks, and skills'
+    },
+    'enfeebled': {
+        stacksWith: ['clumsy', 'sickened'],
+        impact: 'Status penalty to Strength-based rolls and DCs',
+        tacticalNote: 'Excellent vs melee enemies, reduces their damage and athletics'
+    },
+    'clumsy': {
+        stacksWith: ['enfeebled', 'sickened'],
+        impact: 'Status penalty to Dexterity-based rolls, DCs, and AC',
+        tacticalNote: 'Reduces AC and Reflex saves - great setup for area spells'
+    },
+    'dazzled': {
+        impact: 'All creatures are concealed to this creature',
+        tacticalNote: 'Gives 20% miss chance on attacks, good defensive condition to apply'
+    },
+    'blinded': {
+        impact: 'All terrain is difficult, all creatures undetected, -4 Perception',
+        tacticalNote: 'Devastating condition - enemy must guess target locations'
+    },
+    'paralyzed': {
+        impliesConditions: ['off-guard'],
+        impact: 'Cannot act, off-guard, automatically critically fails Reflex saves',
+        tacticalNote: 'Strongest control condition - target is helpless'
+    },
+    'unconscious': {
+        impliesConditions: ['prone', 'off-guard'],
+        impact: 'Cannot act, prone, off-guard, blinded, auto-crit-fail Reflex, -4 AC',
+        tacticalNote: 'Target is out of the fight until woken'
+    },
+    'dying': {
+        impact: 'At 0 HP, progresses toward death, cannot act normally',
+        tacticalNote: 'High priority heal target for allies, can be stabilized'
+    },
+    'wounded': {
+        impact: 'Increases dying value when knocked out, harder to stabilize',
+        tacticalNote: 'Mark of previous knockouts - be careful with this ally'
+    },
+    'fatigued': {
+        impact: '-1 AC and saves, cannot use exploration activities',
+        tacticalNote: 'Minor but persistent debuff'
+    },
+    'fleeing': {
+        impact: 'Must spend actions moving away from source of fear',
+        tacticalNote: 'Excellent crowd control - removes enemy from fight temporarily'
+    },
+    'fascinated': {
+        impact: '-2 Perception, can\'t use concentrate actions except to study subject',
+        tacticalNote: 'Good for removing casters from combat temporarily'
+    },
+    'confused': {
+        impact: 'Attacks random nearby creatures, can\'t delay/ready',
+        tacticalNote: 'Risky but powerful - confused enemy may attack allies'
+    },
+    'doomed': {
+        impact: 'When dying value equals doomed value, character dies',
+        tacticalNote: 'Very dangerous condition - prioritize healing doomed allies'
+    },
+    'drained': {
+        impact: 'Loses max HP equal to level x value, penalty to Constitution checks',
+        tacticalNote: 'Serious condition - effectively reduces HP buffer'
+    },
+    'persistent-damage': {
+        impact: 'Takes damage at end of turn until DC 15 flat check succeeds',
+        tacticalNote: 'Ongoing damage that bypasses most defenses'
+    }
+};
+
+// Ability tactical categories
+const ABILITY_CATEGORIES = {
+    SETUP: 'setup',       // Enables combos, applies conditions
+    DAMAGE: 'damage',     // Direct damage dealing
+    DEFENSE: 'defense',   // Protection, healing, mitigation
+    UTILITY: 'utility',   // Movement, information, misc
+    CONTROL: 'control'    // Crowd control, area denial
+};
+
+// ============================================================================
+// ENHANCED AI DECISION-MAKING FUNCTIONS (Phase 1)
+// ============================================================================
+
+/**
+ * Assesses the threat level of an enemy combatant relative to self.
+ * @param {object} enemy - Enemy combatant data from gameState.aliveEnemies
+ * @param {object} self - Self data from gameState.self
+ * @param {Array} aliveAllies - Array of alive allies from gameState
+ * @param {object} gameState - Full game state for additional context
+ * @returns {object} Threat assessment with level and reasoning
+ */
+function assessEnemyThreat(enemy, self, aliveAllies, gameState) {
+    if (!enemy || !self) {
+        return { level: THREAT_LEVELS.LOW, score: 0, reasons: ['Invalid data'] };
+    }
+
+    let threatScore = 0;
+    const reasons = [];
+
+    // 1. Damage potential vs self HP
+    const selfHpPercent = self.hpPercent || 100;
+    const enemyHpPercent = enemy.hpPercent || 100;
+
+    // Estimate enemy damage potential based on level comparison
+    const selfLevel = self.level || 1;
+    const enemyLevel = enemy.level || selfLevel;
+    const levelDiff = enemyLevel - selfLevel;
+
+    if (levelDiff >= 2) {
+        threatScore += 30;
+        reasons.push(`${levelDiff} levels higher`);
+    } else if (levelDiff === 1) {
+        threatScore += 15;
+    }
+
+    // 2. Enemy remaining actions (if tracked)
+    const enemyActionsRemaining = enemy.actionsRemaining || 3;
+    if (enemyActionsRemaining >= 3) {
+        threatScore += 10;
+        reasons.push('Full actions remaining');
+    }
+
+    // 3. Positioning threat
+    const distance = enemy.numericDistance || enemy.distance || 999;
+    if (distance <= 5) {
+        threatScore += 25;
+        reasons.push('Adjacent (melee range)');
+    } else if (distance <= 30) {
+        threatScore += 10;
+        reasons.push('Close range');
+    }
+
+    // 4. Enemy conditions that make them dangerous
+    const enemyConditions = enemy.conditionsEffects || [];
+    const dangerousConditionNames = ['hasted', 'quickened', 'enlarged', 'heroism', 'rage'];
+    for (const cond of enemyConditions) {
+        const condName = (cond.name || '').toLowerCase();
+        if (dangerousConditionNames.some(dc => condName.includes(dc))) {
+            threatScore += 15;
+            reasons.push(`Has ${cond.name}`);
+        }
+    }
+
+    // 5. Self conditions that increase vulnerability
+    const selfConditions = self.conditionsEffects || [];
+    const vulnerableConditionNames = ['off-guard', 'prone', 'grabbed', 'restrained', 'stunned', 'slowed'];
+    for (const cond of selfConditions) {
+        const condName = (cond.name || '').toLowerCase();
+        if (vulnerableConditionNames.some(vc => condName.includes(vc))) {
+            threatScore += 10;
+            reasons.push(`You are ${cond.name}`);
+        }
+    }
+
+    // 6. HP status modifiers
+    if (selfHpPercent < 25) {
+        threatScore += 20;
+        reasons.push('Your HP is critical');
+    } else if (selfHpPercent < 50) {
+        threatScore += 10;
+    }
+
+    // 7. Enemy HP status (wounded enemies are less threatening)
+    if (enemyHpPercent < 25) {
+        threatScore -= 15;
+        reasons.push('Enemy near death');
+    } else if (enemyHpPercent < 50) {
+        threatScore -= 5;
+    }
+
+    // 8. Area damage potential (check if enemy has area abilities and multiple allies nearby)
+    const alliesNearEnemy = (aliveAllies || []).filter(ally => {
+        const allyDist = ally.numericDistance || 999;
+        return allyDist <= 30;
+    }).length;
+
+    if (alliesNearEnemy >= 2 && enemy.hasAreaAbilities) {
+        threatScore += 15;
+        reasons.push('Can hit multiple allies');
+    }
+
+    // 9. Check enemy AC vs self attack bonus (if available)
+    if (enemy.ac && self.strikes && self.strikes.length > 0) {
+        const bestStrike = self.strikes[0];
+        const baseBonusMatch = bestStrike.bonuses?.match(/([+-]?\d+)/);
+        if (baseBonusMatch) {
+            const baseBonus = parseInt(baseBonusMatch[1], 10);
+            const hitDC = enemy.ac - baseBonus;
+            if (hitDC > 15) {
+                threatScore += 10;
+                reasons.push('Hard to hit (high AC)');
+            }
+        }
+    }
+
+    // Determine threat level based on score
+    let level;
+    if (threatScore >= 60) {
+        level = THREAT_LEVELS.CRITICAL;
+    } else if (threatScore >= 40) {
+        level = THREAT_LEVELS.HIGH;
+    } else if (threatScore >= 20) {
+        level = THREAT_LEVELS.MEDIUM;
+    } else {
+        level = THREAT_LEVELS.LOW;
+    }
+
+    return {
+        level,
+        score: threatScore,
+        reasons: reasons.length > 0 ? reasons : ['Standard threat'],
+        enemyName: enemy.name
+    };
+}
+
+/**
+ * Generates resource scarcity warnings based on current state.
+ * @param {object} gameState - The gathered game state
+ * @param {object} turnState - Current turn state
+ * @returns {Array<string>} Array of warning strings
+ */
+function getResourceWarnings(gameState, turnState) {
+    const warnings = [];
+    const self = gameState?.self;
+    if (!self) return warnings;
+
+    // HP warnings
+    const hpPercent = self.hpPercent || 100;
+    if (hpPercent <= 25) {
+        warnings.push(`HP: ${self.hp?.value}/${self.hp?.max} (${hpPercent}%) - CRITICAL - prioritize defense/healing!`);
+    } else if (hpPercent <= 50) {
+        warnings.push(`HP: ${self.hp?.value}/${self.hp?.max} (${hpPercent}%) - LOW - consider defensive actions`);
+    }
+
+    // Focus Points
+    const focusPoints = self.focusPoints || { value: 0, max: 0 };
+    if (focusPoints.max > 0 && focusPoints.value === 0) {
+        warnings.push(`Focus Points: 0/${focusPoints.max} - cannot use focus spells this turn!`);
+    } else if (focusPoints.max > 0 && focusPoints.value <= 1) {
+        warnings.push(`Focus Points: ${focusPoints.value}/${focusPoints.max} - conserve for critical moments`);
+    }
+
+    // Actions remaining
+    const actionsRemaining = turnState?.actionsRemaining ?? 3;
+    if (actionsRemaining === 1) {
+        warnings.push(`Actions: 1 remaining - choose your highest-impact single-action option!`);
+    } else if (actionsRemaining === 2) {
+        warnings.push(`Actions: 2 remaining - no 3-action abilities available`);
+    }
+
+    // Spell slots - analyze if low on high-level slots
+    const spells = self.spells || [];
+    if (spells.length > 0) {
+        // Check for high-rank spells (rank 3+) with limited slots
+        const highRankSpells = spells.filter(s => {
+            const rankMatch = s.rankDisplay?.match(/R(\d+)/);
+            return rankMatch && parseInt(rankMatch[1], 10) >= 3;
+        });
+
+        // Count unique high-rank slots
+        const highRankSlots = new Set();
+        highRankSpells.forEach(s => {
+            const rankMatch = s.rankDisplay?.match(/R(\d+)/);
+            if (rankMatch) highRankSlots.add(parseInt(rankMatch[1], 10));
+        });
+
+        if (highRankSlots.size > 0 && highRankSlots.size <= 2) {
+            const ranks = Array.from(highRankSlots).sort((a, b) => b - a);
+            warnings.push(`Spell Slots: Limited high-rank slots (R${ranks.join(', R')}) - conserve for emergencies!`);
+        }
+    }
+
+    // MAP warning
+    const currentMAP = turnState?.currentMAP ?? 0;
+    if (currentMAP >= 8) {
+        warnings.push(`MAP: -${currentMAP} penalty - consider non-attack actions or agile weapons`);
+    } else if (currentMAP >= 4) {
+        warnings.push(`MAP: -${currentMAP} penalty - third attack will be at -${currentMAP >= 5 ? 10 : 8}`);
+    }
+
+    return warnings;
+}
+
+/**
+ * Identifies condition exploitation opportunities.
+ * @param {Array} enemies - Array of alive enemies with their conditions
+ * @param {object} self - Self data from gameState
+ * @returns {Array<object>} Array of exploitation opportunities
+ */
+function identifyConditionExploits(enemies, self) {
+    const exploits = [];
+    if (!enemies || !Array.isArray(enemies)) return exploits;
+
+    for (const enemy of enemies) {
+        const conditions = enemy.conditionsEffects || [];
+        for (const cond of conditions) {
+            const condName = (cond.name || '').toLowerCase().split(' ')[0]; // Get base condition name
+            const synergy = CONDITION_SYNERGIES[condName];
+
+            if (synergy) {
+                const exploit = {
+                    enemyName: enemy.name,
+                    condition: cond.name,
+                    value: cond.value,
+                    impact: synergy.impact,
+                    tacticalNote: synergy.tacticalNote,
+                    enablesCombos: synergy.enablesCombos || [],
+                    stacksWith: synergy.stacksWith || []
+                };
+
+                // Generate specific advice based on condition
+                if (condName === 'frightened' && cond.value) {
+                    exploit.advice = `Your save-targeting abilities have +${cond.value} effective DC against them!`;
+                } else if (condName === 'prone') {
+                    exploit.advice = `Melee strikes have +4 circumstance bonus to hit!`;
+                } else if (condName === 'grabbed' || condName === 'restrained') {
+                    exploit.advice = `Target is off-guard - follow up with strikes for bonus accuracy!`;
+                } else if (condName === 'off-guard') {
+                    exploit.advice = `Target has -2 AC - prioritize attacks against them!`;
+                } else if (condName === 'stunned' || condName === 'slowed') {
+                    exploit.advice = `Target has reduced actions - press the advantage!`;
+                } else if (condName === 'clumsy' && cond.value) {
+                    exploit.advice = `Target has -${cond.value} to AC and Reflex - area effects are effective!`;
+                }
+
+                exploits.push(exploit);
+            }
+        }
+    }
+
+    return exploits;
+}
+
+/**
+ * Categorizes an ability by its tactical role.
+ * @param {object} ability - The ability object from gameState
+ * @returns {string} The category from ABILITY_CATEGORIES
+ */
+function categorizeAbilityByRole(ability) {
+    if (!ability) return ABILITY_CATEGORIES.UTILITY;
+
+    const name = (ability.name || '').toLowerCase();
+    const desc = (ability.fullDesc || ability.desc || '').toLowerCase();
+    const traits = ability.traits || ability.traitsString || '';
+    const traitsLower = traits.toLowerCase();
+
+    // Check for healing/defensive abilities
+    if (name.includes('heal') || name.includes('cure') || name.includes('restore') ||
+        desc.includes('regain hit points') || desc.includes('restore hit points')) {
+        return ABILITY_CATEGORIES.DEFENSE;
+    }
+
+    // Check for shield/defense abilities
+    if (name.includes('shield') || name.includes('defend') || name.includes('block') ||
+        name.includes('parry') || traitsLower.includes('shield')) {
+        return ABILITY_CATEGORIES.DEFENSE;
+    }
+
+    // Check for control/debuff abilities
+    if (traitsLower.includes('incapacitation') || traitsLower.includes('mental') ||
+        name.includes('hold') || name.includes('paralyze') || name.includes('stun') ||
+        name.includes('slow') || name.includes('fear') || name.includes('command') ||
+        desc.includes('stunned') || desc.includes('slowed') || desc.includes('paralyzed') ||
+        desc.includes('confused') || desc.includes('controlled')) {
+        return ABILITY_CATEGORIES.CONTROL;
+    }
+
+    // Check for setup/condition-applying abilities
+    if (name.includes('demoralize') || name.includes('trip') || name.includes('grapple') ||
+        name.includes('shove') || name.includes('disarm') || name.includes('feint') ||
+        name.includes('bon mot') || name.includes('intimidat') ||
+        desc.includes('frightened') || desc.includes('off-guard') || desc.includes('prone') ||
+        desc.includes('grabbed') || desc.includes('flat-footed')) {
+        return ABILITY_CATEGORIES.SETUP;
+    }
+
+    // Check for direct damage abilities
+    if (ability.damage || traitsLower.includes('attack') ||
+        desc.includes('damage') || desc.includes('strike') ||
+        name.includes('strike') || name.includes('attack') || name.includes('blast') ||
+        name.includes('bolt') || name.includes('ray') || name.includes('fireball')) {
+        return ABILITY_CATEGORIES.DAMAGE;
+    }
+
+    // Check for buff abilities
+    if (name.includes('bless') || name.includes('haste') || name.includes('heroism') ||
+        name.includes('inspire') || name.includes('aid') || name.includes('buff') ||
+        desc.includes('bonus to') || desc.includes('gain a +')) {
+        return ABILITY_CATEGORIES.SETUP;
+    }
+
+    // Default to utility
+    return ABILITY_CATEGORIES.UTILITY;
+}
+
+/**
+ * Generates dynamic tactical guidance based on current situation.
+ * @param {object} gameState - The gathered game state
+ * @param {object} turnState - Current turn state
+ * @returns {Array<string>} Array of tactical guidance strings
+ */
+function getDynamicTacticalGuidance(gameState, turnState) {
+    const guidance = [];
+    const self = gameState?.self;
+    if (!self) return guidance;
+
+    const hpPercent = self.hpPercent || 100;
+    const actionsRemaining = turnState?.actionsRemaining ?? 3;
+    const aliveEnemies = gameState.aliveEnemies || [];
+    const aliveAllies = gameState.aliveAllies || [];
+
+    // Emergency HP response
+    if (hpPercent < 25) {
+        guidance.push('CRITICAL HP: Prioritize healing, retreat, or ending threats immediately.');
+    } else if (hpPercent < 50) {
+        guidance.push('Low HP: Consider defensive actions or healing before offense.');
+    }
+
+    // Outnumbered response
+    if (aliveEnemies.length > aliveAllies.length + 1) {
+        guidance.push('Outnumbered: Prioritize control spells/abilities to reduce enemy actions.');
+    }
+
+    // Action economy pressure
+    if (actionsRemaining === 1) {
+        guidance.push('Last action: Use highest-impact single-action option (Strike, Demoralize, Step).');
+    }
+
+    // Positioning danger
+    const adjacentEnemies = aliveEnemies.filter(e => {
+        const dist = e.numericDistance || e.distance || 999;
+        return typeof dist === 'number' ? dist <= 5 : parseInt(dist) <= 5;
+    });
+    if (adjacentEnemies.length >= 2) {
+        guidance.push('Multiple enemies adjacent: Consider repositioning, area control, or Escape if grabbed.');
+    } else if (adjacentEnemies.length === 1 && hpPercent < 50) {
+        guidance.push('Enemy adjacent while wounded: Consider stepping away or defensive actions.');
+    }
+
+    // Winning position
+    const totalEnemyHP = aliveEnemies.reduce((sum, e) => {
+        const hp = e.hpCurrent || e.hp?.value || 0;
+        return sum + (typeof hp === 'number' ? hp : 0);
+    }, 0);
+    const totalAllyHP = aliveAllies.reduce((sum, a) => {
+        const hp = a.hpCurrent || a.hp?.value || 0;
+        return sum + (typeof hp === 'number' ? hp : 0);
+    }, 0) + (self.hp?.value || 0);
+
+    if (totalAllyHP > totalEnemyHP * 2 && aliveEnemies.length <= 2) {
+        guidance.push('Winning: Press advantage aggressively to end combat quickly.');
+    }
+
+    // Low enemy HP - focus fire opportunity
+    const woundedEnemies = aliveEnemies.filter(e => (e.hpPercent || 100) < 50);
+    if (woundedEnemies.length > 0) {
+        const nearestWounded = woundedEnemies[0];
+        guidance.push(`Focus fire opportunity: ${nearestWounded.name} is wounded (${nearestWounded.hpPercent}% HP).`);
+    }
+
+    // Downed allies - healing priority
+    const downedAllies = gameState.downedAllies || [];
+    if (downedAllies.length > 0 && gameState.hasHealSpell) {
+        guidance.push(`URGENT: ${downedAllies.length} ally/allies down! Prioritize healing/stabilization.`);
+    }
+
+    // Flanking opportunity
+    if (gameState.flankingData?.flankingOpportunities?.length > 0) {
+        const opp = gameState.flankingData.flankingOpportunities[0];
+        guidance.push(`Flanking opportunity: Move to flank ${opp.target} with ${opp.flankingWith}.`);
+    }
+
+    // Already flanking
+    if (gameState.flankingData?.currentlyFlanking?.length > 0) {
+        guidance.push('Currently flanking: Your melee attacks have advantage (off-guard targets).');
+    }
+
+    return guidance;
+}
+
+/**
+ * Scores strikes for the current tactical situation.
+ * @param {Array} strikes - Array of strike data from gameState.self.strikes
+ * @param {object} primaryEnemy - The primary target enemy data
+ * @param {number} mapPenalty - Current MAP penalty value
+ * @param {object} situationalBonuses - Any situational bonuses (flanking, etc.)
+ * @returns {Array} Sorted array of scored strikes with reasoning
+ */
+function scoreStrikesForSituation(strikes, primaryEnemy, mapPenalty = 0, situationalBonuses = {}) {
+    if (!strikes || !Array.isArray(strikes) || strikes.length === 0) {
+        return [];
+    }
+
+    const enemyAC = primaryEnemy?.ac || 15;
+    const enemyDistance = primaryEnemy?.numericDistance || primaryEnemy?.distance || 5;
+    const enemyConditions = (primaryEnemy?.conditionsEffects || []).map(c => c.name?.toLowerCase() || '');
+    const isFlanking = situationalBonuses.flanking || false;
+
+    return strikes.map(strike => {
+        let score = 0;
+        const reasoning = [];
+
+        // Parse attack bonus
+        const baseBonusMatch = strike.bonuses?.match(/([+-]?\d+)/);
+        const baseBonus = baseBonusMatch ? parseInt(baseBonusMatch[1], 10) : 0;
+
+        // Calculate effective bonus with MAP
+        const isAgile = strike.traits?.toLowerCase().includes('agile');
+        let effectiveMAP = mapPenalty;
+        if (isAgile && mapPenalty > 0) {
+            effectiveMAP = mapPenalty === 5 ? 4 : (mapPenalty === 10 ? 8 : mapPenalty);
+        }
+        const effectiveBonus = baseBonus - effectiveMAP;
+
+        // Apply flanking bonus if applicable
+        const flankingBonus = (isFlanking && strike.details?.toLowerCase().includes('reach')) ? 2 : 0;
+
+        // Calculate hit probability
+        const hitTarget = enemyAC - effectiveBonus - flankingBonus;
+        const hitChance = Math.min(95, Math.max(5, (21 - hitTarget) * 5));
+        score += hitChance * 0.5;
+        reasoning.push(`${hitChance}% hit chance`);
+
+        // Parse damage
+        const avgDamage = parseDamageForAverage(strike.damage || '1d4');
+        score += avgDamage * 2;
+        reasoning.push(`~${avgDamage} avg damage`);
+
+        // Trait bonuses
+        const traits = (strike.traits || '').toLowerCase().split(',').map(t => t.trim());
+
+        if (isAgile && mapPenalty > 0) {
+            score += 10;
+            reasoning.push('Agile (reduced MAP)');
+        }
+
+        if (traits.includes('deadly') && hitChance > 15) {
+            score += 8;
+            reasoning.push('Deadly (crit bonus)');
+        }
+
+        if (traits.includes('fatal') && hitChance > 15) {
+            score += 10;
+            reasoning.push('Fatal (crit bonus)');
+        }
+
+        if (traits.includes('forceful') && mapPenalty > 0) {
+            score += 5;
+            reasoning.push('Forceful (damage ramp)');
+        }
+
+        if (traits.includes('sweep') && mapPenalty > 0) {
+            score += 5;
+            reasoning.push('Sweep (bonus vs 2nd target)');
+        }
+
+        // Trip/Grab traits for control
+        if (traits.includes('trip') && !enemyConditions.includes('prone')) {
+            score += 12;
+            reasoning.push('Can trip (setup)');
+        }
+
+        if ((traits.includes('grab') || traits.includes('improved grab')) && !enemyConditions.includes('grabbed')) {
+            score += 12;
+            reasoning.push('Can grab (control)');
+        }
+
+        // Reach consideration
+        const reachMatch = strike.details?.match(/Reach (\d+)ft/i);
+        const strikeReach = reachMatch ? parseInt(reachMatch[1], 10) : 5;
+        const numericEnemyDistance = typeof enemyDistance === 'number' ? enemyDistance : parseInt(enemyDistance) || 5;
+
+        if (strikeReach < numericEnemyDistance) {
+            score = -100; // Can't reach = unusable
+            reasoning.length = 0;
+            reasoning.push('OUT OF RANGE');
+        } else if (strikeReach > 5 && numericEnemyDistance > 5) {
+            score += 5;
+            reasoning.push('Reach advantage');
+        }
+
+        // Ready status
+        if (!strike.ready) {
+            score -= 20;
+            reasoning.push('Not ready (requires draw)');
+        }
+
+        // Stance strike bonus
+        if (strike.isStanceStrike) {
+            score += 8;
+            reasoning.push('Stance strike');
+        }
+
+        return {
+            strike,
+            score: Math.round(score),
+            reasoning: reasoning.join(', '),
+            effectiveBonus,
+            hitChance,
+            avgDamage,
+            canReach: strikeReach >= numericEnemyDistance
+        };
+    }).sort((a, b) => b.score - a.score);
+}
+
+/**
+ * Detects the tactical role of an actor based on their abilities and stats.
+ * @param {Actor} actor - The Foundry VTT actor
+ * @returns {string} The detected role from PARTY_ROLES
+ */
+function detectActorRole(actor) {
+    if (!actor) return PARTY_ROLES.UNKNOWN;
+
+    const className = (actor.class?.name || '').toLowerCase();
+    const items = actor.items;
+    let roleScores = {
+        [PARTY_ROLES.TANK]: 0,
+        [PARTY_ROLES.HEALER]: 0,
+        [PARTY_ROLES.STRIKER]: 0,
+        [PARTY_ROLES.CONTROLLER]: 0,
+        [PARTY_ROLES.SUPPORT]: 0,
+        [PARTY_ROLES.RANGED]: 0
+    };
+
+    // Class-based scoring
+    const classRoles = {
+        'champion': { [PARTY_ROLES.TANK]: 30 },
+        'fighter': { [PARTY_ROLES.STRIKER]: 20, [PARTY_ROLES.TANK]: 10 },
+        'barbarian': { [PARTY_ROLES.STRIKER]: 25, [PARTY_ROLES.TANK]: 5 },
+        'monk': { [PARTY_ROLES.STRIKER]: 20 },
+        'rogue': { [PARTY_ROLES.STRIKER]: 25 },
+        'ranger': { [PARTY_ROLES.RANGED]: 20, [PARTY_ROLES.STRIKER]: 10 },
+        'cleric': { [PARTY_ROLES.HEALER]: 30, [PARTY_ROLES.SUPPORT]: 10 },
+        'druid': { [PARTY_ROLES.CONTROLLER]: 15, [PARTY_ROLES.HEALER]: 15 },
+        'wizard': { [PARTY_ROLES.CONTROLLER]: 25, [PARTY_ROLES.RANGED]: 5 },
+        'sorcerer': { [PARTY_ROLES.CONTROLLER]: 15, [PARTY_ROLES.RANGED]: 15 },
+        'bard': { [PARTY_ROLES.SUPPORT]: 30, [PARTY_ROLES.HEALER]: 10 },
+        'oracle': { [PARTY_ROLES.HEALER]: 20, [PARTY_ROLES.SUPPORT]: 15 },
+        'witch': { [PARTY_ROLES.CONTROLLER]: 20, [PARTY_ROLES.SUPPORT]: 10 },
+        'alchemist': { [PARTY_ROLES.SUPPORT]: 20, [PARTY_ROLES.RANGED]: 10 },
+        'investigator': { [PARTY_ROLES.STRIKER]: 15, [PARTY_ROLES.SUPPORT]: 10 },
+        'swashbuckler': { [PARTY_ROLES.STRIKER]: 25 },
+        'magus': { [PARTY_ROLES.STRIKER]: 20, [PARTY_ROLES.CONTROLLER]: 10 },
+        'summoner': { [PARTY_ROLES.CONTROLLER]: 15, [PARTY_ROLES.STRIKER]: 15 },
+        'gunslinger': { [PARTY_ROLES.RANGED]: 30 },
+        'inventor': { [PARTY_ROLES.STRIKER]: 15, [PARTY_ROLES.RANGED]: 15 },
+        'psychic': { [PARTY_ROLES.CONTROLLER]: 25 },
+        'thaumaturge': { [PARTY_ROLES.STRIKER]: 20 },
+        'kineticist': { [PARTY_ROLES.RANGED]: 20, [PARTY_ROLES.CONTROLLER]: 10 }
+    };
+
+    const classRole = classRoles[className];
+    if (classRole) {
+        for (const [role, score] of Object.entries(classRole)) {
+            roleScores[role] += score;
+        }
+    }
+
+    // Check for healing spells
+    let healingSpellCount = 0;
+    let controlSpellCount = 0;
+    let damageSpellCount = 0;
+
+    if (actor.spellcasting) {
+        for (const entry of actor.spellcasting) {
+            if (!entry.spells) continue;
+            for (const spell of entry.spells) {
+                const spellName = (spell.name || '').toLowerCase();
+                const spellDesc = (spell.system?.description?.value || '').toLowerCase();
+
+                if (spellName.includes('heal') || spellName.includes('restore') ||
+                    spellDesc.includes('regain hit points')) {
+                    healingSpellCount++;
+                }
+                if (spellDesc.includes('stunned') || spellDesc.includes('paralyzed') ||
+                    spellDesc.includes('slowed') || spellDesc.includes('incapacitation')) {
+                    controlSpellCount++;
+                }
+                if (spellDesc.includes('damage') && !spellDesc.includes('regain')) {
+                    damageSpellCount++;
+                }
+            }
+        }
+    }
+
+    roleScores[PARTY_ROLES.HEALER] += healingSpellCount * 5;
+    roleScores[PARTY_ROLES.CONTROLLER] += controlSpellCount * 5;
+    roleScores[PARTY_ROLES.RANGED] += damageSpellCount * 2;
+
+    // Check armor proficiency for tank
+    const heavyArmorProf = actor.system?.proficiencies?.defenses?.['heavy-armor']?.rank || 0;
+    if (heavyArmorProf >= 2) {
+        roleScores[PARTY_ROLES.TANK] += 15;
+    }
+
+    // Check shield usage
+    const hasShield = items.some(i => i.type === 'shield' && i.system?.equipped?.carryType === 'held');
+    if (hasShield) {
+        roleScores[PARTY_ROLES.TANK] += 10;
+    }
+
+    // Check for ranged weapons
+    const hasRangedWeapon = items.some(i =>
+        i.type === 'weapon' && i.system?.equipped?.carryType === 'held' &&
+        (i.system?.traits?.value?.includes('range') || i.system?.range?.value > 5)
+    );
+    if (hasRangedWeapon) {
+        roleScores[PARTY_ROLES.RANGED] += 10;
+    }
+
+    // Determine highest scoring role
+    let highestRole = PARTY_ROLES.STRIKER; // Default
+    let highestScore = 0;
+    for (const [role, score] of Object.entries(roleScores)) {
+        if (score > highestScore) {
+            highestScore = score;
+            highestRole = role;
+        }
+    }
+
+    return highestRole;
+}
+
+/**
+ * Updates the party coordination state for the current combat.
+ * @param {Combat} combat - The active combat
+ * @param {string} combatantId - The combatant who just acted
+ * @param {object} actionData - Data about the action taken
+ */
+async function updatePartyCoordinationState(combat, combatantId, actionData) {
+    if (!combat || !combatantId) return;
+
+    let coordination = combat.getFlag(MODULE_ID, FLAGS.PARTY_COORDINATION) || {
+        roundState: {
+            partyHealthSummary: { totalHP: 0, averagePercent: 100, criticallyWounded: [] },
+            threatAssessment: { primaryThreat: null, highPriorityTargets: [] }
+        },
+        allyActionsThisRound: [],
+        activeTactics: {
+            focusTarget: null,
+            protectTarget: null
+        },
+        roles: {}
+    };
+
+    // Record the action
+    if (actionData) {
+        coordination.allyActionsThisRound.push({
+            combatantId: combatantId,
+            name: actionData.name || 'Unknown',
+            action: actionData.action || 'Unknown Action',
+            target: actionData.target || null,
+            outcome: actionData.outcome || 'unknown',
+            timestamp: Date.now()
+        });
+    }
+
+    await combat.setFlag(MODULE_ID, FLAGS.PARTY_COORDINATION, coordination);
+}
+
+/**
+ * Clears the ally actions list at the start of a new round.
+ * @param {Combat} combat - The active combat
+ */
+async function clearRoundActions(combat) {
+    if (!combat) return;
+
+    let coordination = combat.getFlag(MODULE_ID, FLAGS.PARTY_COORDINATION);
+    if (coordination) {
+        coordination.allyActionsThisRound = [];
+        await combat.setFlag(MODULE_ID, FLAGS.PARTY_COORDINATION, coordination);
+    }
+}
+
+/**
+ * Identifies flanking opportunities for the current combatant.
+ * @param {object} gameState - The gathered game state
+ * @returns {Array<object>} Array of flanking opportunities
+ */
+function identifyFlankingOpportunities(gameState) {
+    const opportunities = [];
+    const flankingData = gameState?.flankingData;
+
+    if (!flankingData) return opportunities;
+
+    // Return existing opportunities from flankingData
+    if (flankingData.flankingOpportunities?.length > 0) {
+        for (const opp of flankingData.flankingOpportunities) {
+            opportunities.push({
+                type: 'flanking',
+                enemy: opp.target,
+                partner: opp.flankingWith,
+                hint: opp.hint,
+                benefit: 'Target becomes off-guard (-2 AC) for both flankers'
+            });
+        }
+    }
+
+    return opportunities;
+}
+
+/**
+ * Identifies combo opportunities based on enemy conditions.
+ * @param {Array} enemies - Array of enemies with conditions
+ * @returns {Array<object>} Array of combo opportunities
+ */
+function identifyComboOpportunities(enemies) {
+    const combos = [];
+    if (!enemies || !Array.isArray(enemies)) return combos;
+
+    for (const enemy of enemies) {
+        const conditions = enemy.conditionsEffects || [];
+        for (const cond of conditions) {
+            const condName = (cond.name || '').toLowerCase().split(' ')[0];
+            const synergy = CONDITION_SYNERGIES[condName];
+
+            if (synergy?.enablesCombos?.length > 0) {
+                combos.push({
+                    enemy: enemy.name,
+                    condition: cond.name,
+                    combos: synergy.enablesCombos,
+                    benefit: synergy.tacticalNote
+                });
+            }
+        }
+    }
+
+    return combos;
+}
+
+/**
+ * Assesses healing priorities for allies.
+ * @param {object} gameState - The gathered game state
+ * @returns {object} Healing priority assessment
+ */
+function assessHealingPriorities(gameState) {
+    const priorities = {
+        urgent: [],      // Downed allies (HP 0)
+        critical: [],    // <25% HP
+        wounded: [],     // <50% HP
+        healthy: []      // >=50% HP
+    };
+
+    // Check downed allies
+    const downedAllies = gameState?.downedAllies || [];
+    for (const ally of downedAllies) {
+        priorities.urgent.push({
+            name: ally.name,
+            hp: 0,
+            hpPercent: 0,
+            reason: 'Downed - needs immediate healing or stabilization'
+        });
+    }
+
+    // Check alive allies
+    const aliveAllies = gameState?.aliveAllies || [];
+    for (const ally of aliveAllies) {
+        const hpPercent = ally.hpPercent || 100;
+
+        if (hpPercent < 25) {
+            priorities.critical.push({
+                name: ally.name,
+                hp: ally.hp?.value,
+                hpPercent,
+                reason: 'Critically wounded'
+            });
+        } else if (hpPercent < 50) {
+            priorities.wounded.push({
+                name: ally.name,
+                hp: ally.hp?.value,
+                hpPercent,
+                reason: 'Wounded'
+            });
+        } else {
+            priorities.healthy.push({
+                name: ally.name,
+                hp: ally.hp?.value,
+                hpPercent
+            });
+        }
+    }
+
+    return priorities;
+}
+
+/**
+ * Generates the party coordination section for the prompt.
+ * @param {object} gameState - The gathered game state
+ * @param {Combat} combat - The active combat
+ * @param {object} combatant - The current combatant
+ * @returns {string} Formatted party coordination prompt section
+ */
+function generatePartyCoordinationPromptSection(gameState, combat, combatant) {
+    if (!combat || !combatant) return '';
+
+    // Check if party coordination is enabled
+    let enablePartyCoordination = false;
+    try {
+        enablePartyCoordination = game.settings.get(MODULE_ID, 'enablePartyCoordination');
+    } catch (e) { /* Setting not registered */ }
+
+    if (!enablePartyCoordination) return '';
+
+    const coordination = combat.getFlag(MODULE_ID, FLAGS.PARTY_COORDINATION) || {};
+    const roles = coordination.roles || {};
+    const allyActions = coordination.allyActionsThisRound || [];
+    const activeTactics = coordination.activeTactics || {};
+
+    // Get current combatant's role
+    const selfRole = roles[combatant.id] || detectActorRole(combatant.actor);
+    const roleDescriptions = {
+        [PARTY_ROLES.TANK]: 'Engage threats, protect allies, position at front line',
+        [PARTY_ROLES.HEALER]: 'Prioritize healing critical allies, then wounded, then buffs',
+        [PARTY_ROLES.STRIKER]: 'Focus fire on designated targets, position for flanking',
+        [PARTY_ROLES.CONTROLLER]: 'Disable key enemies, area control, debuff priority targets',
+        [PARTY_ROLES.SUPPORT]: 'Buff allies, debuff enemies, provide aid where needed',
+        [PARTY_ROLES.RANGED]: 'Damage priority targets from safe distance, support melee'
+    };
+
+    let sections = [];
+
+    // Role section
+    sections.push(`Your Role: ${selfRole.toUpperCase()} - ${roleDescriptions[selfRole] || 'Adapt to situation'}`);
+
+    // Ally status summary
+    if (gameState.aliveAllies?.length > 0) {
+        const allyStatusLines = [];
+        for (const ally of gameState.aliveAllies) {
+            const allyRole = roles[ally.id] || 'Unknown';
+            const hpStatus = ally.hpPercent < 25 ? 'CRITICAL' : (ally.hpPercent < 50 ? 'Wounded' : 'Healthy');
+            allyStatusLines.push(`- ${ally.name} (${allyRole.toUpperCase()}): ${ally.hpPercent}% HP [${hpStatus}]`);
+        }
+        sections.push('Ally Status:\n' + allyStatusLines.join('\n'));
+    }
+
+    // Ally actions this round
+    if (allyActions.length > 0) {
+        const actionLines = allyActions.map(a =>
+            `- ${a.name}: ${a.action}${a.target ? ` on ${a.target}` : ''}${a.outcome ? ` (${a.outcome})` : ''}`
+        );
+        sections.push('Ally Actions This Round:\n' + actionLines.join('\n'));
+    }
+
+    // Active tactics
+    const tacticLines = [];
+    if (activeTactics.focusTarget) {
+        tacticLines.push(`- FOCUS TARGET: ${activeTactics.focusTarget.name} (${activeTactics.focusTarget.reason || 'Priority target'})`);
+    }
+    if (activeTactics.protectTarget) {
+        tacticLines.push(`- PROTECT: ${activeTactics.protectTarget.name} (${activeTactics.protectTarget.reason || 'Valuable ally'})`);
+    }
+    if (tacticLines.length > 0) {
+        sections.push('Active Tactics:\n' + tacticLines.join('\n'));
+    }
+
+    // Coordination opportunities
+    const flankingOpps = identifyFlankingOpportunities(gameState);
+    const comboOpps = identifyComboOpportunities(gameState.aliveEnemies);
+    const healingPriorities = assessHealingPriorities(gameState);
+
+    const opportunityLines = [];
+    if (flankingOpps.length > 0) {
+        opportunityLines.push(`- ${flankingOpps[0].hint}`);
+    }
+    if (comboOpps.length > 0) {
+        opportunityLines.push(`- ${comboOpps[0].enemy} is ${comboOpps[0].condition} - ${comboOpps[0].benefit}`);
+    }
+    if (healingPriorities.urgent.length > 0 && selfRole === PARTY_ROLES.HEALER) {
+        opportunityLines.push(`- URGENT: ${healingPriorities.urgent[0].name} is down!`);
+    } else if (healingPriorities.critical.length > 0 && selfRole === PARTY_ROLES.HEALER) {
+        opportunityLines.push(`- ${healingPriorities.critical[0].name} is critically wounded (${healingPriorities.critical[0].hpPercent}%)`);
+    }
+
+    if (opportunityLines.length > 0) {
+        sections.push('Coordination Opportunities:\n' + opportunityLines.join('\n'));
+    }
+
+    return sections.length > 0 ? '\n**PARTY COORDINATION:**\n' + sections.join('\n\n') : '';
+}
 
 // --- Hooks ---
 
@@ -141,6 +1187,708 @@ function getNumericRange(abilityData, context = 'unknown') {
     // Absolute default for anything else
     // console.debug(`AI getNumericRange (${context}): Defaulting to 0 for ability ${itemName} of type ${itemType}`); // DEBUG
     return 0;
+}
+
+// ============================================================================
+// HIT PROBABILITY & EXPECTED DAMAGE ANALYSIS
+// ============================================================================
+
+/**
+ * Calculates the hit probability for an attack against a target AC.
+ * Accounts for natural 1/20 rules in PF2e.
+ * @param {number} attackBonus - The total attack modifier (e.g., +15).
+ * @param {number} targetAC - The target's Armor Class.
+ * @param {number} mapPenalty - The current Multiple Attack Penalty (0, -4, -5, -8, -10).
+ * @returns {object} An object with hit and crit percentages: { hit: number, crit: number }.
+ */
+function calculateHitProbability(attackBonus, targetAC, mapPenalty = 0) {
+    if (typeof attackBonus !== 'number' || typeof targetAC !== 'number') {
+        return { hit: 0, crit: 0 };
+    }
+
+    const effectiveBonus = attackBonus + mapPenalty;
+    const targetNumber = targetAC - effectiveBonus;
+
+    // Calculate raw hit chance (need to roll >= targetNumber on d20)
+    // On d20: rolls 1-20, each has 5% chance
+    // Need: roll + bonus >= AC, so roll >= AC - bonus = targetNumber
+    let hitChance = 0;
+    let critChance = 0;
+
+    // Count successful rolls (including crits)
+    for (let roll = 1; roll <= 20; roll++) {
+        const total = roll + effectiveBonus;
+        const difference = total - targetAC;
+
+        // PF2e degrees of success
+        let degree = 'failure';
+        if (difference >= 10) degree = 'criticalSuccess';
+        else if (difference >= 0) degree = 'success';
+        else if (difference >= -10) degree = 'failure';
+        else degree = 'criticalFailure';
+
+        // Natural 20 upgrades success one step
+        if (roll === 20) {
+            if (degree === 'failure') degree = 'success';
+            else if (degree === 'success') degree = 'criticalSuccess';
+        }
+        // Natural 1 downgrades success one step
+        if (roll === 1) {
+            if (degree === 'criticalSuccess') degree = 'success';
+            else if (degree === 'success') degree = 'failure';
+        }
+
+        if (degree === 'success') hitChance += 5;
+        if (degree === 'criticalSuccess') {
+            hitChance += 5;
+            critChance += 5;
+        }
+    }
+
+    return {
+        hit: Math.min(100, Math.max(0, hitChance)),
+        crit: Math.min(100, Math.max(0, critChance))
+    };
+}
+
+/**
+ * Parses a damage formula string and calculates average damage.
+ * @param {string} damageFormula - The damage formula (e.g., "2d12+5 slashing").
+ * @returns {number} The average damage value.
+ */
+function parseDamageForAverage(damageFormula) {
+    if (!damageFormula || typeof damageFormula !== 'string') return 0;
+
+    // Match patterns like "2d12", "1d8+5", "3d6 + 10 fire", etc.
+    const dicePattern = /(\d+)d(\d+)/gi;
+    const modifierPattern = /([+-]\s*\d+)/g;
+
+    let totalAverage = 0;
+    let match;
+
+    // Calculate average from dice
+    while ((match = dicePattern.exec(damageFormula)) !== null) {
+        const numDice = parseInt(match[1], 10);
+        const dieSize = parseInt(match[2], 10);
+        // Average of a die = (1 + dieSize) / 2
+        totalAverage += numDice * ((1 + dieSize) / 2);
+    }
+
+    // Add flat modifiers
+    const modifiers = damageFormula.match(modifierPattern);
+    if (modifiers) {
+        for (const mod of modifiers) {
+            const value = parseInt(mod.replace(/\s/g, ''), 10);
+            if (!isNaN(value)) totalAverage += value;
+        }
+    }
+
+    return totalAverage;
+}
+
+/**
+ * Calculates expected damage for a strike considering hit/crit probabilities.
+ * @param {string} damageFormula - The damage formula.
+ * @param {object} hitProb - The hit probability object from calculateHitProbability.
+ * @param {string[]} traits - Array of traits (for deadly/fatal).
+ * @returns {number} The expected damage value.
+ */
+function calculateExpectedDamage(damageFormula, hitProb, traits = []) {
+    const avgDamage = parseDamageForAverage(damageFormula);
+    if (avgDamage === 0 || !hitProb) return 0;
+
+    // Base expected damage from hits (non-crits)
+    const normalHitChance = (hitProb.hit - hitProb.crit) / 100;
+    const critChance = hitProb.crit / 100;
+
+    // Crit damage is double
+    let critMultiplier = 2;
+
+    // Check for deadly/fatal traits which add extra crit damage
+    // Deadly adds extra dice on crit (e.g., deadly d10 adds 1d10, deadly 2d10 adds 2d10)
+    // Fatal changes the die size on crit and adds one die
+    let extraCritDamage = 0;
+    const traitsLower = traits.map(t => typeof t === 'string' ? t.toLowerCase() : '');
+
+    for (const trait of traitsLower) {
+        if (trait.startsWith('deadly-')) {
+            // Extract dice from deadly trait (e.g., "deadly-d10" or "deadly-2d8")
+            const deadlyMatch = trait.match(/deadly-(\d*)d(\d+)/);
+            if (deadlyMatch) {
+                const numDice = deadlyMatch[1] ? parseInt(deadlyMatch[1], 10) : 1;
+                const dieSize = parseInt(deadlyMatch[2], 10);
+                extraCritDamage += numDice * ((1 + dieSize) / 2);
+            }
+        } else if (trait.startsWith('fatal-')) {
+            // Fatal upgrades die and adds one die on crit
+            // This is complex to calculate precisely, so we approximate
+            const fatalMatch = trait.match(/fatal-d(\d+)/);
+            if (fatalMatch) {
+                const fatalDieSize = parseInt(fatalMatch[1], 10);
+                // Add approximately one fatal die's worth of average
+                extraCritDamage += (1 + fatalDieSize) / 2;
+            }
+        }
+    }
+
+    const expectedDamage = (normalHitChance * avgDamage) +
+                          (critChance * (avgDamage * critMultiplier + extraCritDamage));
+
+    return Math.round(expectedDamage * 10) / 10; // Round to 1 decimal
+}
+
+// ============================================================================
+// FLANKING & POSITIONAL AWARENESS
+// ============================================================================
+
+/**
+ * Checks if two tokens are adjacent (within 5 feet of each other).
+ * Handles different token sizes.
+ * @param {Token} token1 - First token.
+ * @param {Token} token2 - Second token.
+ * @returns {boolean} True if tokens are adjacent.
+ */
+function isTokenAdjacent(token1, token2) {
+    if (!token1 || !token2 || !canvas?.grid) return false;
+
+    try {
+        // Use Foundry's built-in distance measurement
+        const distance = token1.distanceTo(token2);
+        // Adjacent means within reach (typically 5ft, but account for token sizes)
+        // For PF2e, creatures are adjacent if they could make a reach 5ft melee attack
+        return distance <= 5;
+    } catch (e) {
+        console.warn("AI isTokenAdjacent: Error calculating distance:", e);
+        return false;
+    }
+}
+
+/**
+ * Checks if an attacker is flanking a target with help from an ally.
+ * PF2e flanking requires attacker and ally to be on opposite sides/corners of target.
+ * @param {Token} attackerToken - The attacking token.
+ * @param {Token} targetToken - The target being attacked.
+ * @param {Token} allyToken - The ally potentially providing flanking.
+ * @returns {boolean} True if flanking condition is met.
+ */
+function checkFlanking(attackerToken, targetToken, allyToken) {
+    if (!attackerToken || !targetToken || !allyToken || !canvas?.grid) return false;
+
+    try {
+        // Both attacker and ally must be adjacent to target
+        if (!isTokenAdjacent(attackerToken, targetToken)) return false;
+        if (!isTokenAdjacent(allyToken, targetToken)) return false;
+
+        // Get center positions
+        const attackerCenter = attackerToken.center;
+        const targetCenter = targetToken.center;
+        const allyCenter = allyToken.center;
+
+        if (!attackerCenter || !targetCenter || !allyCenter) return false;
+
+        // Calculate vectors from target to attacker and target to ally
+        const toAttacker = {
+            x: attackerCenter.x - targetCenter.x,
+            y: attackerCenter.y - targetCenter.y
+        };
+        const toAlly = {
+            x: allyCenter.x - targetCenter.x,
+            y: allyCenter.y - targetCenter.y
+        };
+
+        // Normalize vectors
+        const attackerMag = Math.sqrt(toAttacker.x ** 2 + toAttacker.y ** 2);
+        const allyMag = Math.sqrt(toAlly.x ** 2 + toAlly.y ** 2);
+
+        if (attackerMag === 0 || allyMag === 0) return false;
+
+        const attackerNorm = { x: toAttacker.x / attackerMag, y: toAttacker.y / attackerMag };
+        const allyNorm = { x: toAlly.x / allyMag, y: toAlly.y / allyMag };
+
+        // Calculate dot product - if negative, they're on opposite sides
+        // For flanking, we want them roughly opposite (dot product < -0.5 approximately)
+        // This gives us a ~120 degree cone for "opposite sides"
+        const dotProduct = attackerNorm.x * allyNorm.x + attackerNorm.y * allyNorm.y;
+
+        // Flanking requires being on opposite sides - dot product should be negative
+        // Using -0.5 as threshold allows for some positioning flexibility
+        return dotProduct < -0.5;
+    } catch (e) {
+        console.warn("AI checkFlanking: Error checking flanking:", e);
+        return false;
+    }
+}
+
+/**
+ * Analyzes flanking opportunities for a combatant.
+ * @param {Token} selfToken - The attacking token.
+ * @param {Array} aliveEnemies - Array of alive enemy combatant info objects.
+ * @param {Array} aliveAllies - Array of alive ally combatant info objects.
+ * @param {object} combat - The combat object.
+ * @returns {object} Object with current flanking situations and opportunities.
+ */
+function analyzeFlanking(selfToken, aliveEnemies, aliveAllies, combat) {
+    const result = {
+        currentlyFlanking: [],      // Enemies we're currently flanking
+        flankingOpportunities: [],  // Enemies we could flank if we moved
+        adjacentAllies: [],         // Allies adjacent to us
+        adjacentEnemies: []         // Enemies adjacent to us
+    };
+
+    if (!selfToken || !canvas?.tokens) return result;
+
+    try {
+        // Check each enemy
+        for (const enemy of aliveEnemies) {
+            if (!enemy.tokenId) continue;
+            const enemyToken = canvas.tokens.get(enemy.tokenId);
+            if (!enemyToken) continue;
+
+            const isAdjacent = isTokenAdjacent(selfToken, enemyToken);
+            if (isAdjacent) {
+                result.adjacentEnemies.push({
+                    name: enemy.name,
+                    id: enemy.id,
+                    tokenId: enemy.tokenId
+                });
+            }
+
+            // Check if any ally is flanking this enemy with us
+            for (const ally of aliveAllies) {
+                if (!ally.tokenId) continue;
+                const allyToken = canvas.tokens.get(ally.tokenId);
+                if (!allyToken) continue;
+
+                // Check if ally is adjacent to us
+                if (isTokenAdjacent(selfToken, allyToken)) {
+                    // Add to adjacent allies list (avoid duplicates)
+                    if (!result.adjacentAllies.find(a => a.tokenId === ally.tokenId)) {
+                        result.adjacentAllies.push({
+                            name: ally.name,
+                            id: ally.id,
+                            tokenId: ally.tokenId
+                        });
+                    }
+                }
+
+                // Check flanking
+                if (checkFlanking(selfToken, enemyToken, allyToken)) {
+                    result.currentlyFlanking.push({
+                        target: enemy.name,
+                        targetId: enemy.tokenId,
+                        flankingWith: ally.name,
+                        allyId: ally.tokenId
+                    });
+                } else if (isTokenAdjacent(allyToken, enemyToken) && !isAdjacent) {
+                    // Ally is adjacent to enemy but we're not - potential flanking opportunity
+                    result.flankingOpportunities.push({
+                        target: enemy.name,
+                        targetId: enemy.tokenId,
+                        flankingWith: ally.name,
+                        allyId: ally.tokenId,
+                        hint: `Move to opposite side of ${enemy.name} from ${ally.name} to flank`
+                    });
+                }
+            }
+        }
+    } catch (e) {
+        console.error("AI analyzeFlanking: Error analyzing flanking:", e);
+    }
+
+    return result;
+}
+
+// ============================================================================
+// COMBAT MEMORY SYSTEM
+// ============================================================================
+
+/**
+ * Records the outcome of an AI-suggested action into combat memory.
+ * @param {Combat} combat - The combat object.
+ * @param {string} combatantId - The combatant ID who performed the action.
+ * @param {object} actionData - Data about the action taken.
+ */
+async function recordActionOutcome(combat, combatantId, actionData) {
+    if (!combat || !combatantId || !actionData) return;
+
+    try {
+        const enabled = game.settings.get(MODULE_ID, 'enableCombatMemory');
+        if (!enabled) return;
+
+        const currentRound = combat.round;
+        const memory = combat.getFlag(MODULE_ID, FLAGS.COMBAT_MEMORY) || {
+            rounds: {},
+            statistics: {}
+        };
+
+        // Initialize round data if needed
+        if (!memory.rounds[currentRound]) {
+            memory.rounds[currentRound] = { combatantActions: {} };
+        }
+        if (!memory.rounds[currentRound].combatantActions[combatantId]) {
+            memory.rounds[currentRound].combatantActions[combatantId] = {
+                actionsTaken: [],
+                damageDealt: 0,
+                damageReceived: 0,
+                conditionsInflicted: [],
+                conditionsReceived: []
+            };
+        }
+
+        const combatantMemory = memory.rounds[currentRound].combatantActions[combatantId];
+
+        // Record the action
+        combatantMemory.actionsTaken.push({
+            action: actionData.action,
+            target: actionData.target,
+            outcome: actionData.outcome || 'unknown',
+            damage: actionData.damage || 0,
+            timestamp: Date.now()
+        });
+
+        // Update statistics
+        if (actionData.damage) {
+            combatantMemory.damageDealt += actionData.damage;
+        }
+        if (actionData.conditionInflicted) {
+            combatantMemory.conditionsInflicted.push(actionData.conditionInflicted);
+        }
+
+        // Update running statistics for this combatant
+        if (!memory.statistics[combatantId]) {
+            memory.statistics[combatantId] = {
+                totalAttacks: 0,
+                successfulAttacks: 0,
+                totalDamage: 0,
+                effectiveActions: []
+            };
+        }
+
+        const stats = memory.statistics[combatantId];
+        if (actionData.isAttack) {
+            stats.totalAttacks++;
+            if (actionData.outcome === 'success' || actionData.outcome === 'criticalSuccess') {
+                stats.successfulAttacks++;
+            }
+        }
+        if (actionData.damage) {
+            stats.totalDamage += actionData.damage;
+        }
+        if (actionData.wasEffective && !stats.effectiveActions.includes(actionData.action)) {
+            stats.effectiveActions.push(actionData.action);
+        }
+
+        await combat.setFlag(MODULE_ID, FLAGS.COMBAT_MEMORY, memory);
+    } catch (e) {
+        console.error("AI recordActionOutcome: Error recording action outcome:", e);
+    }
+}
+
+/**
+ * Gets a formatted summary of combat memory for the prompt.
+ * Limited to last 2-3 rounds for token efficiency.
+ * @param {Combat} combat - The combat object.
+ * @param {string} combatantId - The combatant ID.
+ * @param {number} roundsBack - How many rounds back to include (default 2).
+ * @returns {string} Formatted memory summary for the prompt.
+ */
+function getCombatMemorySummary(combat, combatantId, roundsBack = 2) {
+    if (!combat || !combatantId) return '';
+
+    try {
+        const enabled = game.settings.get(MODULE_ID, 'enableCombatMemory');
+        if (!enabled) return '';
+
+        const memory = combat.getFlag(MODULE_ID, FLAGS.COMBAT_MEMORY);
+        if (!memory || !memory.rounds) return '';
+
+        const currentRound = combat.round;
+        const summaryLines = [];
+
+        // Get actions from recent rounds
+        for (let round = Math.max(1, currentRound - roundsBack); round < currentRound; round++) {
+            const roundData = memory.rounds[round]?.combatantActions?.[combatantId];
+            if (!roundData || roundData.actionsTaken.length === 0) continue;
+
+            const roundSummary = roundData.actionsTaken.map(a => {
+                let line = `${a.action}`;
+                if (a.target) line += ` vs ${a.target}`;
+                if (a.outcome) line += ` -> ${a.outcome}`;
+                if (a.damage) line += ` (${a.damage} dmg)`;
+                return line;
+            }).join('; ');
+
+            summaryLines.push(`Round ${round}: ${roundSummary}`);
+        }
+
+        // Add statistics if available
+        const stats = memory.statistics?.[combatantId];
+        if (stats && stats.totalAttacks > 0) {
+            const hitRate = Math.round((stats.successfulAttacks / stats.totalAttacks) * 100);
+            summaryLines.push(`Overall: ${hitRate}% hit rate (${stats.successfulAttacks}/${stats.totalAttacks} attacks)`);
+            if (stats.effectiveActions.length > 0) {
+                summaryLines.push(`Effective actions: ${stats.effectiveActions.join(', ')}`);
+            }
+        }
+
+        return summaryLines.length > 0 ? summaryLines.join('\n') : '';
+    } catch (e) {
+        console.error("AI getCombatMemorySummary: Error getting memory summary:", e);
+        return '';
+    }
+}
+
+/**
+ * Analyzes recent outcomes to provide adaptive hints.
+ * @param {Combat} combat - The combat object.
+ * @param {string} combatantId - The combatant ID.
+ * @returns {string[]} Array of tactical hints based on recent performance.
+ */
+function analyzeRecentOutcomes(combat, combatantId) {
+    const hints = [];
+
+    try {
+        const enabled = game.settings.get(MODULE_ID, 'enableCombatMemory');
+        if (!enabled) return hints;
+
+        const memory = combat.getFlag(MODULE_ID, FLAGS.COMBAT_MEMORY);
+        if (!memory || !memory.rounds) return hints;
+
+        const currentRound = combat.round;
+
+        // Look at last round's actions
+        const lastRoundData = memory.rounds[currentRound - 1]?.combatantActions?.[combatantId];
+        if (!lastRoundData) return hints;
+
+        const recentActions = lastRoundData.actionsTaken;
+        if (!recentActions || recentActions.length === 0) return hints;
+
+        // Check for consecutive misses
+        const recentAttacks = recentActions.filter(a =>
+            a.outcome === 'failure' || a.outcome === 'success' ||
+            a.outcome === 'criticalSuccess' || a.outcome === 'criticalFailure'
+        );
+
+        const consecutiveMisses = recentAttacks.filter(a =>
+            a.outcome === 'failure' || a.outcome === 'criticalFailure'
+        ).length;
+
+        if (consecutiveMisses >= 2) {
+            hints.push(`Your last ${consecutiveMisses} attacks missed. Consider a different approach (debuff enemy AC, buff yourself, use a different attack, or target a different enemy).`);
+        }
+
+        // Check if damage was low despite hitting
+        const totalDamage = lastRoundData.damageDealt || 0;
+        const successfulHits = recentAttacks.filter(a =>
+            a.outcome === 'success' || a.outcome === 'criticalSuccess'
+        ).length;
+
+        if (successfulHits >= 2 && totalDamage < 10) {
+            hints.push("Your hits are landing but damage is low. Consider using a higher damage weapon or spell.");
+        }
+
+        // Check for effective actions that worked well
+        const stats = memory.statistics?.[combatantId];
+        if (stats?.effectiveActions?.length > 0) {
+            const randomEffective = stats.effectiveActions[Math.floor(Math.random() * stats.effectiveActions.length)];
+            if (Math.random() > 0.5) { // 50% chance to suggest
+                hints.push(`"${randomEffective}" has been effective for you previously.`);
+            }
+        }
+    } catch (e) {
+        console.error("AI analyzeRecentOutcomes: Error analyzing outcomes:", e);
+    }
+
+    return hints;
+}
+
+// ============================================================================
+// MULTI-ACTION PLANNING MODE
+// ============================================================================
+
+/**
+ * Crafts a prompt for multi-action turn planning.
+ * Requests a complete 3-action plan instead of single actions.
+ * @param {Combatant} combatant - The combatant.
+ * @param {object} gameState - The gathered game state.
+ * @param {object} turnState - The current turn state.
+ * @returns {string} The multi-action plan prompt.
+ */
+function craftMultiActionPlanPrompt(combatant, gameState, turnState) {
+    // Get the base prompt content (reuse existing logic)
+    const basePrompt = craftSingleActionPrompt(combatant, gameState, turnState);
+
+    // Replace the output format section with multi-action plan format
+    const multiActionInstructions = `
+
+**MULTI-ACTION PLAN MODE:**
+You have ${turnState.actionsRemaining} actions remaining. Plan your COMPLETE turn by suggesting all ${turnState.actionsRemaining} actions in sequence.
+
+**Output Format (CRITICAL - MUST be valid JSON):**
+\`\`\`json
+{
+    "plan": [
+        {
+            "sequence": 1,
+            "action": "Action Name (Cost)",
+            "target": "Target Name [ID: tokenId] or Self/None",
+            "rationale": "Brief explanation"
+        },
+        {
+            "sequence": 2,
+            "action": "Action Name (Cost)",
+            "target": "Target Name [ID: tokenId] or Self/None",
+            "rationale": "Brief explanation"
+        },
+        {
+            "sequence": 3,
+            "action": "Action Name (Cost)",
+            "target": "Target Name [ID: tokenId] or Self/None",
+            "rationale": "Brief explanation"
+        }
+    ],
+    "contingency": "If the first action fails, consider [alternative approach].",
+    "overallStrategy": "Brief description of the turn's tactical goal."
+}
+\`\`\`
+
+**Planning Guidelines:**
+1. Consider action synergies - setup actions should enable powerful follow-ups
+2. Account for MAP when planning multiple Strikes
+3. Include movement if needed to reach targets
+4. Consider defensive actions if HP is low
+5. Plan contingencies for if key actions fail (e.g., miss on first Strike)
+6. Prioritize actions that maximize overall turn value
+
+**IMPORTANT:**
+- Total action cost must NOT exceed ${turnState.actionsRemaining}
+- Plan exactly ${turnState.actionsRemaining} actions (or fewer if ending turn early is optimal)
+- Consider the order carefully - earlier actions affect later ones
+`;
+
+    // Append multi-action instructions to the base prompt
+    return basePrompt + multiActionInstructions;
+}
+
+/**
+ * Parses a multi-action plan response from the LLM.
+ * @param {string} rawResponse - The raw LLM response.
+ * @returns {object|null} Parsed plan object or null if parsing fails.
+ */
+function parseMultiActionPlan(rawResponse) {
+    try {
+        // Try to extract JSON from the response
+        let jsonMatch = rawResponse.match(/```json\s*([\s\S]*?)\s*```/);
+        let jsonString = jsonMatch ? jsonMatch[1] : null;
+
+        // Fallback: try to find raw JSON object
+        if (!jsonString) {
+            const rawJsonMatch = rawResponse.match(/\{[\s\S]*"plan"[\s\S]*\}/);
+            jsonString = rawJsonMatch ? rawJsonMatch[0] : null;
+        }
+
+        if (!jsonString) {
+            console.warn("AI parseMultiActionPlan: Could not find JSON in response");
+            return null;
+        }
+
+        const parsed = JSON.parse(jsonString);
+
+        // Validate structure
+        if (!parsed.plan || !Array.isArray(parsed.plan)) {
+            console.warn("AI parseMultiActionPlan: Invalid plan structure");
+            return null;
+        }
+
+        // Validate each action in the plan
+        for (const action of parsed.plan) {
+            if (!action.sequence || !action.action) {
+                console.warn("AI parseMultiActionPlan: Invalid action in plan", action);
+                return null;
+            }
+        }
+
+        return {
+            plan: parsed.plan,
+            contingency: parsed.contingency || null,
+            overallStrategy: parsed.overallStrategy || null
+        };
+    } catch (e) {
+        console.error("AI parseMultiActionPlan: Error parsing plan:", e);
+        return null;
+    }
+}
+
+/**
+ * Gets the current action plan for an actor.
+ * @param {Actor} actor - The actor.
+ * @returns {object|null} The stored action plan or null.
+ */
+function getStoredActionPlan(actor) {
+    if (!actor) return null;
+    return actor.getFlag(MODULE_ID, FLAGS.ACTION_PLAN) || null;
+}
+
+/**
+ * Stores an action plan on an actor.
+ * @param {Actor} actor - The actor.
+ * @param {object} plan - The action plan to store.
+ */
+async function storeActionPlan(actor, plan) {
+    if (!actor) return;
+    await actor.setFlag(MODULE_ID, FLAGS.ACTION_PLAN, {
+        plannedActions: plan.plan,
+        contingency: plan.contingency,
+        overallStrategy: plan.overallStrategy,
+        currentStep: 0,
+        timestamp: Date.now()
+    });
+}
+
+/**
+ * Gets the next action from the stored plan.
+ * @param {Actor} actor - The actor.
+ * @returns {object|null} The next action or null if plan is exhausted.
+ */
+function getNextPlannedAction(actor) {
+    const plan = getStoredActionPlan(actor);
+    if (!plan || !plan.plannedActions) return null;
+
+    const nextAction = plan.plannedActions[plan.currentStep];
+    if (!nextAction) return null;
+
+    return {
+        action: nextAction.action,
+        target: nextAction.target,
+        rationale: nextAction.rationale,
+        sequence: nextAction.sequence,
+        isLastAction: plan.currentStep >= plan.plannedActions.length - 1,
+        contingency: plan.contingency,
+        overallStrategy: plan.overallStrategy
+    };
+}
+
+/**
+ * Advances to the next action in the stored plan.
+ * @param {Actor} actor - The actor.
+ */
+async function advancePlanStep(actor) {
+    const plan = getStoredActionPlan(actor);
+    if (!plan) return;
+
+    await actor.setFlag(MODULE_ID, FLAGS.ACTION_PLAN, {
+        ...plan,
+        currentStep: plan.currentStep + 1
+    });
+}
+
+/**
+ * Clears the stored action plan.
+ * @param {Actor} actor - The actor.
+ */
+async function clearActionPlan(actor) {
+    if (!actor) return;
+    await actor.unsetFlag(MODULE_ID, FLAGS.ACTION_PLAN);
 }
 
 
@@ -1223,6 +2971,23 @@ async function _onConfirmActionClick(event) {
 
         // NOW, update MAP based on the identified traits *after* state is saved
         await _updateMAPBasedOnTrait(actor, identifiedTraits);
+
+        // --- Record action for combat memory ---
+        try {
+            const isAttack = identifiedTraits.includes('attack') ||
+                            cleanedActionDesc.toLowerCase().includes('strike') ||
+                            cleanedActionDesc.toLowerCase().includes('attack');
+            await recordActionOutcome(combat, combatantId, {
+                action: cleanedActionDesc,
+                target: null, // Will be populated by outcome tracking if available
+                outcome: 'confirmed', // Initial state - will be updated by outcome tracking
+                damage: 0,
+                isAttack: isAttack,
+                wasEffective: false // Will be updated based on outcome
+            });
+        } catch (memoryError) {
+            console.warn("AI Confirm: Error recording action to combat memory:", memoryError);
+        }
 
         // --- Store the ID of the *suggestion* message that was just confirmed ---
         // Subsequent chat messages will be processed by handleChatMessage if their ID is greater
@@ -3607,6 +5372,9 @@ const followUpAction = isComboSetup ? comboSetupMatch[1].trim() : null;
             // --- Get Token ID ---
             const otherTokenId = otherCanvasToken?.id || null; // Get the token ID
 
+            // --- Get AC for probability calculations (enemies only) ---
+            const ac = canSee ? (otherActor?.system?.attributes?.ac?.value ?? null) : null;
+
             return {
                 id: otherCombatant.id,
                 tokenId: otherTokenId, // <<< ADDED tokenId
@@ -3619,7 +5387,8 @@ const followUpAction = isComboSetup ? comboSetupMatch[1].trim() : null;
                 hpPercent: hpPercent, // Will be null if not visible
                 defeated: otherActor?.isDefeated ?? false,
                 conditionsEffects: targetConditionsEffects, // Will be empty if not visible
-                size: size // Will be null if not visible
+                size: size, // Will be null if not visible
+                ac: ac // Enemy AC for hit probability calculations
             };
         })
         .filter(info => info !== null); // <<< NEW: Filter out null entries >>>
@@ -4621,6 +6390,162 @@ if (!processedAsRegen) {
     // Update hasAllies flag based on *alive* allies
     hasAllies = aliveAllies.length > 0;
 
+    // ============================================================================
+    // HIT PROBABILITY CALCULATIONS FOR STRIKES
+    // ============================================================================
+    let showProbabilityAnalysis = false;
+    try {
+        showProbabilityAnalysis = game.settings.get(MODULE_ID, 'showProbabilityAnalysis');
+    } catch (e) { /* Setting not registered yet, default to false */ }
+
+    if (showProbabilityAnalysis) {
+        // Get closest enemy AC for probability calculations
+        const closestEnemy = aliveEnemies.find(e => e.numericDistance !== Infinity && e.ac !== null);
+        const closestEnemyAC = closestEnemy?.ac ?? null;
+
+        // Calculate hit probabilities for each strike
+        for (const strike of selfInfo.strikes) {
+            if (closestEnemyAC !== null) {
+                // Parse the base attack bonus from the bonuses string
+                const baseBonusMatch = strike.bonuses?.match(/([+-]?\d+)/);
+                const baseBonus = baseBonusMatch ? parseInt(baseBonusMatch[1], 10) : 0;
+
+                // Calculate probabilities at each MAP level
+                const prob0 = calculateHitProbability(baseBonus, closestEnemyAC, 0);
+                const prob1 = calculateHitProbability(baseBonus, closestEnemyAC, strike.agile ? -4 : -5);
+                const prob2 = calculateHitProbability(baseBonus, closestEnemyAC, strike.agile ? -8 : -10);
+
+                // Parse traits for deadly/fatal from the strike
+                const traitsList = strike.traits ? strike.traits.split(', ') : [];
+
+                strike.hitChance = {
+                    map0: prob0.hit,
+                    map1: prob1.hit,
+                    map2: prob2.hit,
+                    crit0: prob0.crit,
+                    crit1: prob1.crit,
+                    crit2: prob2.crit
+                };
+
+                strike.expectedDamage = {
+                    map0: calculateExpectedDamage(strike.damage, prob0, traitsList),
+                    map1: calculateExpectedDamage(strike.damage, prob1, traitsList),
+                    map2: calculateExpectedDamage(strike.damage, prob2, traitsList)
+                };
+
+                strike.targetAC = closestEnemyAC;
+            }
+        }
+    }
+
+    // ============================================================================
+    // FLANKING ANALYSIS
+    // ============================================================================
+    let flankingData = {
+        currentlyFlanking: [],
+        flankingOpportunities: [],
+        adjacentAllies: [],
+        adjacentEnemies: []
+    };
+
+    let enableFlankingAnalysis = false;
+    try {
+        enableFlankingAnalysis = game.settings.get(MODULE_ID, 'enableFlankingAnalysis');
+    } catch (e) { /* Setting not registered yet, default to false */ }
+
+    if (enableFlankingAnalysis && selfCanvasToken) {
+        flankingData = analyzeFlanking(selfCanvasToken, aliveEnemies, aliveAllies, combat);
+    }
+
+    // ============================================================================
+    // COMBAT MEMORY SUMMARY
+    // ============================================================================
+    let combatMemorySummary = '';
+    let adaptiveHints = [];
+
+    let enableCombatMemory = false;
+    try {
+        enableCombatMemory = game.settings.get(MODULE_ID, 'enableCombatMemory');
+    } catch (e) { /* Setting not registered yet, default to false */ }
+
+    if (enableCombatMemory && combat) {
+        combatMemorySummary = getCombatMemorySummary(combat, currentCombatant.id);
+        adaptiveHints = analyzeRecentOutcomes(combat, currentCombatant.id);
+    }
+
+    // ============================================================================
+    // ENHANCED TACTICAL ANALYSIS (Phase 1 Features)
+    // ============================================================================
+
+    // Threat assessment for each enemy
+    const threatAssessments = aliveEnemies.map(enemy => {
+        const assessment = assessEnemyThreat(enemy, selfInfo, aliveAllies, { aliveEnemies, aliveAllies });
+        return {
+            ...enemy,
+            threat: assessment
+        };
+    }).sort((a, b) => b.threat.score - a.threat.score);
+
+    // Find primary threat
+    const primaryThreat = threatAssessments.length > 0 ? threatAssessments[0] : null;
+
+    // Condition exploitation opportunities
+    const conditionExploits = identifyConditionExploits(aliveEnemies, selfInfo);
+
+    // Resource warnings
+    const resourceWarnings = getResourceWarnings({ self: selfInfo }, { actionsRemaining });
+
+    // Dynamic tactical guidance
+    const tacticalGuidance = getDynamicTacticalGuidance(
+        {
+            self: selfInfo,
+            aliveEnemies,
+            aliveAllies
+        },
+        { actionsRemaining }
+    );
+
+    // Enhanced strike scoring
+    let strikeAnalysis = [];
+    if (selfInfo.strikes && selfInfo.strikes.length > 0 && primaryThreat) {
+        const situationalBonuses = {
+            targetProne: (primaryThreat.conditionsEffects || []).some(c =>
+                (c.name || '').toLowerCase().includes('prone')
+            ) ? 4 : 0,
+            targetOffGuard: (primaryThreat.conditionsEffects || []).some(c =>
+                (c.name || '').toLowerCase().includes('off-guard') ||
+                (c.name || '').toLowerCase().includes('flat-footed')
+            ) ? 2 : 0,
+            flanking: flankingData.currentlyFlanking.some(f =>
+                f.targetId === primaryThreat.tokenId
+            ) ? 2 : 0
+        };
+
+        strikeAnalysis = scoreStrikesForSituation(
+            selfInfo.strikes,
+            primaryThreat,
+            0, // Current MAP will be applied in prompt generation
+            situationalBonuses
+        );
+    }
+
+    // Healing priorities (for party coordination)
+    const healingPriorities = assessHealingPriorities({
+        self: selfInfo,
+        aliveAllies,
+        downedAllies
+    });
+
+    // Flanking opportunities
+    const flankingOpportunities = identifyFlankingOpportunities({
+        self: selfInfo,
+        aliveAllies,
+        aliveEnemies
+    });
+
+    // Combo opportunities from conditions
+    const comboOpportunities = identifyComboOpportunities(aliveEnemies);
+
     return {
         currentTurnCombatantId: currentCombatant.id, scene: sceneInfo,
         aliveAllies: aliveAllies, downedAllies: downedAllies, // New lists
@@ -4635,7 +6560,23 @@ if (!processedAsRegen) {
         hasGrabAttack: hasGrabAttack,
         hasVariableCostActions: hasVariableCostActions,
         hasLeveledSpells: hasLeveledSpells,
-        hasFreeActions: hasFreeActions
+        hasFreeActions: hasFreeActions,
+        // New tactical analysis data:
+        flankingData: flankingData,
+        combatMemorySummary: combatMemorySummary,
+        adaptiveHints: adaptiveHints,
+        showProbabilityAnalysis: showProbabilityAnalysis,
+        // Enhanced tactical analysis (Phase 1):
+        threatAssessments: threatAssessments,
+        primaryThreat: primaryThreat,
+        conditionExploits: conditionExploits,
+        resourceWarnings: resourceWarnings,
+        tacticalGuidance: tacticalGuidance,
+        strikeAnalysis: strikeAnalysis,
+        // Party coordination data (Phase 2):
+        healingPriorities: healingPriorities,
+        flankingOpportunities: flankingOpportunities,
+        comboOpportunities: comboOpportunities
     };
 } // End of gatherGameState function
 
@@ -4717,8 +6658,46 @@ function craftSingleActionPrompt(combatant, gameState, turnState, skippedAction 
                 const stanceNameClean = gameState?.self?.activeStance?.name?.replace(/^Stance:\s*/, '').trim(); // Get clean stance name
                 const isStanceStrike = stanceNameClean && ability.name === stanceNameClean;
                 const stanceMarker = isStanceStrike ? "(Stance Strike) " : "";
-                const readyPrefix = ability.ready ? "(Ready) " : "(Requires Draw/Equip) "; let mapPenaltyValue = 0; if (currentMAP === 5 || currentMAP === 4) mapPenaltyValue = ability.agile ? -4 : -5; else if (currentMAP === 10 || currentMAP === 8) mapPenaltyValue = ability.agile ? -8 : -10; const baseBonusString = ability.bonuses?.split('/')[0]?.trim() ?? '?'; const baseBonusMatch = baseBonusString.match(/([+-]\d+)/); let currentBonusString = baseBonusString; if (baseBonusMatch?.[1]) { const baseBonusNumber = parseInt(baseBonusMatch[1], 10); if (!isNaN(baseBonusNumber)) { const currentBonusNumber = baseBonusNumber + mapPenaltyValue; currentBonusString = `${currentBonusNumber >= 0 ? '+' : ''}${currentBonusNumber}`; } }
-                entryString = `  - ${readyPrefix}${stanceMarker}${ability.name}: ${currentBonusString} (Base: ${baseBonusString})`; // Added stanceMarker
+                const readyPrefix = ability.ready ? "(Ready) " : "(Requires Draw/Equip) ";
+                let mapPenaltyValue = 0;
+                if (currentMAP === 5 || currentMAP === 4) mapPenaltyValue = ability.agile ? -4 : -5;
+                else if (currentMAP === 10 || currentMAP === 8) mapPenaltyValue = ability.agile ? -8 : -10;
+                const baseBonusString = ability.bonuses?.split('/')[0]?.trim() ?? '?';
+                const baseBonusMatch = baseBonusString.match(/([+-]\d+)/);
+                let currentBonusString = baseBonusString;
+                if (baseBonusMatch?.[1]) {
+                    const baseBonusNumber = parseInt(baseBonusMatch[1], 10);
+                    if (!isNaN(baseBonusNumber)) {
+                        const currentBonusNumber = baseBonusNumber + mapPenaltyValue;
+                        currentBonusString = `${currentBonusNumber >= 0 ? '+' : ''}${currentBonusNumber}`;
+                    }
+                }
+
+                entryString = `  - ${readyPrefix}${stanceMarker}${ability.name}: ${currentBonusString} (Base: ${baseBonusString})`;
+
+                // --- Add Hit Probability and Expected Damage ---
+                if (gameState.showProbabilityAnalysis && ability.hitChance && ability.expectedDamage) {
+                    // Determine which MAP level we're currently at
+                    let currentHitChance, currentCritChance, currentExpDmg;
+                    if (currentMAP === 0) {
+                        currentHitChance = ability.hitChance.map0;
+                        currentCritChance = ability.hitChance.crit0;
+                        currentExpDmg = ability.expectedDamage.map0;
+                    } else if (currentMAP === 4 || currentMAP === 5) {
+                        currentHitChance = ability.hitChance.map1;
+                        currentCritChance = ability.hitChance.crit1;
+                        currentExpDmg = ability.expectedDamage.map1;
+                    } else {
+                        currentHitChance = ability.hitChance.map2;
+                        currentCritChance = ability.hitChance.crit2;
+                        currentExpDmg = ability.expectedDamage.map2;
+                    }
+                    entryString += ` | Hit: ${currentHitChance}% (Crit: ${currentCritChance}%) | E[Dmg]: ${currentExpDmg}`;
+                    if (ability.targetAC) {
+                        entryString += ` vs AC ${ability.targetAC}`;
+                    }
+                }
+
                 if (ability.damage && ability.damage !== 'N/A') entryString += `, Dmg: ${ability.damage}`;
                 if (ability.traits) entryString += `, Traits: [${ability.traits}]`;
                 if (ability.details) entryString += ` (${ability.details})`;
@@ -4947,12 +6926,46 @@ function craftSingleActionPrompt(combatant, gameState, turnState, skippedAction 
     const consumablesString = createAbilityListString(filteredConsumables, 'Consumable', closestEnemyDist, gameState);
     const conditionsEffectsString = createAbilityListString(gameState.self.conditionsEffects, 'Condition/Effect', closestEnemyDist, gameState); // Pass gameState here too for consistency
 
-    const formatCombatantEntry = (c) => { let parts = [`${c.name} [ID: ${c.tokenId}] (${c.size || 'size?'})`]; parts.push(c.positionString); if (c.distance !== null) parts.push(`Distance: ${c.distance}`); if (c.hpPercent !== null) parts.push(`HP: ${c.hpPercent}%`); if (c.defeated) parts.push('[Defeated]'); if (c.conditionsEffects?.length > 0) { parts.push(`Cond/Effects: ${c.conditionsEffects.map(ce => { const name = ce.name; const value = ce.value; if (value !== null && !String(name).endsWith(` ${value}`)) { return `${name} ${value}`; } return name; }).join(', ')}`); } return `  - ${parts.join(' | ')}`; }; // Include TokenID in the name string
+    // Format combatant entry with AC and flanking markers for enemies
+    const formatCombatantEntry = (c, isEnemy = false) => {
+        let parts = [`${c.name} [ID: ${c.tokenId}] (${c.size || 'size?'})`];
+        parts.push(c.positionString);
+        if (c.distance !== null) parts.push(`Distance: ${c.distance}`);
+        if (c.hpPercent !== null) parts.push(`HP: ${c.hpPercent}%`);
+        // Add AC for enemies (for tactical decision making)
+        if (isEnemy && c.ac !== null) parts.push(`AC: ${c.ac}`);
+        if (c.defeated) parts.push('[Defeated]');
+
+        // Check for flanking status
+        if (isEnemy && gameState.flankingData) {
+            const flankingInfo = gameState.flankingData.currentlyFlanking?.find(f => f.targetId === c.tokenId);
+            if (flankingInfo) {
+                parts.push(`[FLANKING with ${flankingInfo.flankingWith}]`);
+            } else {
+                const flankOpportunity = gameState.flankingData.flankingOpportunities?.find(f => f.targetId === c.tokenId);
+                if (flankOpportunity) {
+                    parts.push(`[CAN FLANK with ${flankOpportunity.flankingWith}]`);
+                }
+            }
+        }
+
+        if (c.conditionsEffects?.length > 0) {
+            parts.push(`Cond/Effects: ${c.conditionsEffects.map(ce => {
+                const name = ce.name;
+                const value = ce.value;
+                if (value !== null && !String(name).endsWith(` ${value}`)) {
+                    return `${name} ${value}`;
+                }
+                return name;
+            }).join(', ')}`);
+        }
+        return `  - ${parts.join(' | ')}`;
+    };
     // Format the four new lists
-    const aliveAlliesFormatted = gameState.aliveAllies?.map(formatCombatantEntry).join('\n') || EMPTY_LIST_PLACEHOLDER;
-    const downedAlliesFormatted = gameState.downedAllies?.map(formatCombatantEntry).join('\n') || EMPTY_LIST_PLACEHOLDER;
-    const aliveEnemiesFormatted = gameState.aliveEnemies?.map(formatCombatantEntry).join('\n') || EMPTY_LIST_PLACEHOLDER;
-    const deadEnemiesFormatted = gameState.deadEnemies?.map(formatCombatantEntry).join('\n') || EMPTY_LIST_PLACEHOLDER;
+    const aliveAlliesFormatted = gameState.aliveAllies?.map(c => formatCombatantEntry(c, false)).join('\n') || EMPTY_LIST_PLACEHOLDER;
+    const downedAlliesFormatted = gameState.downedAllies?.map(c => formatCombatantEntry(c, false)).join('\n') || EMPTY_LIST_PLACEHOLDER;
+    const aliveEnemiesFormatted = gameState.aliveEnemies?.map(c => formatCombatantEntry(c, true)).join('\n') || EMPTY_LIST_PLACEHOLDER;
+    const deadEnemiesFormatted = gameState.deadEnemies?.map(c => formatCombatantEntry(c, true)).join('\n') || EMPTY_LIST_PLACEHOLDER;
     const skipInstruction = skippedAction ? `\nIMPORTANT NOTE: You previously suggested "${skippedAction}". DO NOT suggest that action again this turn.` : "";
     const manualNotesSection = (manualNotes && manualNotes.trim() !== "") ? `\n**Manual Notes from Player/GM:** ${manualNotes.trim()}` : "";
 
@@ -4983,7 +6996,126 @@ function craftSingleActionPrompt(combatant, gameState, turnState, skippedAction 
     const activeStanceSection = gameState.self?.activeStance?.name !== 'None'
         ? `- **Active Stance**: ${gameState.self.activeStance.name}${gameState.self.activeStance.desc ? `\n    Stance Desc: ${gameState.self.activeStance.desc}` : ''}`
         : `- **Active Stance**: None`;
- 
+
+    // ============================================================================
+    // ENHANCED TACTICAL ANALYSIS SECTIONS (Phase 1 Features)
+    // ============================================================================
+
+    // --- Threat Assessment Section ---
+    let threatAssessmentSection = '';
+    if (gameState.threatAssessments && gameState.threatAssessments.length > 0) {
+        const threatLines = gameState.threatAssessments.slice(0, 5).map(enemy => {
+            const threatLabel = enemy.threat?.level || 'UNKNOWN';
+            const reasons = enemy.threat?.reasons?.slice(0, 3).join(', ') || 'Standard threat';
+            return `  - ${threatLabel}: ${enemy.name} - ${reasons}`;
+        });
+        threatAssessmentSection = `
+**THREAT ASSESSMENT:**
+${threatLines.join('\n')}
+`;
+    }
+
+    // --- Resource Status Section ---
+    let resourceStatusSection = '';
+    if (gameState.resourceWarnings && gameState.resourceWarnings.length > 0) {
+        resourceStatusSection = `
+**RESOURCE STATUS:**
+${gameState.resourceWarnings.map(w => `- ${w}`).join('\n')}
+`;
+    }
+
+    // --- Condition Exploitation Section ---
+    let conditionExploitSection = '';
+    if (gameState.conditionExploits && gameState.conditionExploits.length > 0) {
+        const exploitLines = gameState.conditionExploits.slice(0, 5).map(exploit => {
+            return `  - [${exploit.enemyName}] is ${exploit.condition} → ${exploit.benefit}`;
+        });
+        conditionExploitSection = `
+**CONDITION EXPLOITATION:**
+${exploitLines.join('\n')}
+`;
+    }
+
+    // --- Dynamic Tactical Guidance Section ---
+    let tacticalGuidanceSection = '';
+    if (gameState.tacticalGuidance && gameState.tacticalGuidance.length > 0) {
+        tacticalGuidanceSection = `
+**SITUATIONAL GUIDANCE:**
+${gameState.tacticalGuidance.map(g => `- ${g}`).join('\n')}
+`;
+    }
+
+    // --- Strike Analysis Section ---
+    let strikeAnalysisSection = '';
+    if (gameState.strikeAnalysis && gameState.strikeAnalysis.length > 0 && gameState.primaryThreat) {
+        const topStrikes = gameState.strikeAnalysis.slice(0, 3);
+        const strikeLines = topStrikes.map((s, idx) => {
+            const strike = s.strike;
+            return `  ${idx + 1}. ${strike.name} (Score: ${s.score}) - ${s.reasoning}`;
+        });
+        strikeAnalysisSection = `
+**STRIKE ANALYSIS (Best for current situation vs ${gameState.primaryThreat.name}):**
+${strikeLines.join('\n')}
+`;
+    }
+
+    // --- Party Coordination Section ---
+    let partyCoordinationSection = '';
+    try {
+        const enablePartyCoordination = game.settings.get(MODULE_ID, 'enablePartyCoordination');
+        if (enablePartyCoordination && combat && combatant) {
+            partyCoordinationSection = generatePartyCoordinationPromptSection(gameState, combat, combatant);
+        }
+    } catch (e) {
+        // Setting not registered yet or error, skip party coordination
+    }
+
+    // --- Flanking Opportunities Section ---
+    let flankingOpportunitiesSection = '';
+    if (gameState.flankingOpportunities && gameState.flankingOpportunities.length > 0) {
+        const flankLines = gameState.flankingOpportunities.slice(0, 3).map(opp => {
+            return `  - Move adjacent to ${opp.enemy} to flank with ${opp.ally}${opp.moveRequired ? ` (${opp.moveRequired}ft move)` : ''}`;
+        });
+        flankingOpportunitiesSection = `
+**FLANKING OPPORTUNITIES:**
+${flankLines.join('\n')}
+`;
+    }
+
+    // --- Combo Opportunities Section ---
+    let comboOpportunitiesSection = '';
+    if (gameState.comboOpportunities && gameState.comboOpportunities.length > 0) {
+        const comboLines = gameState.comboOpportunities.slice(0, 5).map(combo => {
+            return `  - [${combo.enemy}] ${combo.condition} → ${combo.benefits.join(', ')}`;
+        });
+        comboOpportunitiesSection = `
+**COMBO OPPORTUNITIES (Exploit Enemy Conditions):**
+${comboLines.join('\n')}
+`;
+    }
+
+    // --- Healing Priorities Section ---
+    let healingPrioritiesSection = '';
+    if (gameState.healingPriorities) {
+        const hp = gameState.healingPriorities;
+        const priorityLines = [];
+        if (hp.urgent && hp.urgent.length > 0) {
+            priorityLines.push(`  URGENT: ${hp.urgent.map(a => a.name).join(', ')} (Downed)`);
+        }
+        if (hp.critical && hp.critical.length > 0) {
+            priorityLines.push(`  CRITICAL: ${hp.critical.map(a => `${a.name} (${a.hpPercent}%)`).join(', ')}`);
+        }
+        if (hp.wounded && hp.wounded.length > 0) {
+            priorityLines.push(`  Wounded: ${hp.wounded.map(a => `${a.name} (${a.hpPercent}%)`).join(', ')}`);
+        }
+        if (priorityLines.length > 0) {
+            healingPrioritiesSection = `
+**HEALING PRIORITIES:**
+${priorityLines.join('\n')}
+`;
+        }
+    }
+
     // --- Consolidate Contextual Reminders ---
     let contextualInfo = [];
     // Stance
@@ -5071,7 +7203,7 @@ ${(() => {
 ${activeStanceSection}
 - Senses: ${gameState.self?.senses || 'Normal'}
 - Defenses: Res: ${gameState.self?.resistances} | Weak: ${gameState.self?.weaknesses} | Imm: ${gameState.self?.immunities}
-
+${resourceStatusSection}${tacticalGuidanceSection}
 ${conditionsEffectsString !== EMPTY_LIST_PLACEHOLDER ? `
 - **Current Conditions & Effects (CRITICAL - Check Descriptions for Restrictions/Impacts):**
 ${conditionsEffectsString}
@@ -5082,9 +7214,15 @@ ${conditionsEffectsString}
 - Your Actions Taken This Turn: ${turnState.actionsTakenDescriptions?.join('; ') || 'None'}
 
 ${interimResultsString}${recentEventsString}
-
+${gameState.combatMemorySummary ? `
+**Previous Rounds (Combat Memory):**
+${gameState.combatMemorySummary}
+` : ''}${gameState.adaptiveHints?.length > 0 ? `
+**Tactical Insights:**
+${gameState.adaptiveHints.map(h => `- ${h}`).join('\n')}
+` : ''}
 **Combat Situation (Round ${combat?.round ?? '?'})**
-
+${threatAssessmentSection}${conditionExploitSection}${comboOpportunitiesSection}${strikeAnalysisSection}
 ${closestEnemyInfo}
 ${gameState.aliveEnemies?.length > 0 ? `
 - **ALIVE Enemies (Closest First):**
@@ -5098,7 +7236,7 @@ ${downedAlliesFormatted}` : ''}
 ${gameState.deadEnemies?.length > 0 ? `
 - **DEAD Enemies (Closest First):**
 ${deadEnemiesFormatted}` : ''}
-
+${partyCoordinationSection}${flankingOpportunitiesSection}${healingPrioritiesSection}
 ${skipInstruction}
 ${manualNotesSection}
 
@@ -5267,7 +7405,7 @@ async function callLLM(prompt, apiKey, endpoint, model = "gpt-4o") {
                     model: model,
                     messages: [{ role: "user", content: prompt }],
                     temperature: temperature,
-                    max_tokens: 500, // Increased from 180 to prevent truncation
+                    max_tokens: 2048, // Increased to handle reasoning models that use tokens for chain-of-thought
                     stop: null
                 }),
                 signal: controller.signal
@@ -5302,12 +7440,28 @@ async function callLLM(prompt, apiKey, endpoint, model = "gpt-4o") {
 
             const responseData = await response.json();
 
+            // Check for truncation due to max_tokens
+            const finishReason = responseData.choices?.[0]?.finish_reason || responseData.choices?.[0]?.native_finish_reason;
+            if (finishReason === 'length' || finishReason === 'MAX_TOKENS') {
+                console.warn("PF2e AI Combat Assistant | LLM response was truncated (hit max_tokens limit). The response may be incomplete.");
+            }
+
             // Support multiple LLM API response formats
             let messageContent = null;
 
             // OpenAI / OpenRouter / LM Studio format
             if (responseData.choices?.[0]?.message?.content) {
                 messageContent = responseData.choices[0].message.content;
+            }
+            // Reasoning models may put content in a separate reasoning field (fallback if content is empty)
+            else if (responseData.choices?.[0]?.message?.reasoning && !responseData.choices?.[0]?.message?.content) {
+                // For reasoning models, try to extract the action from the reasoning if content is empty
+                const reasoning = responseData.choices[0].message.reasoning;
+                // Look for ACTION: pattern in reasoning as last resort
+                if (reasoning.includes('ACTION:')) {
+                    messageContent = reasoning;
+                    console.warn("PF2e AI Combat Assistant | Using reasoning field as content (reasoning model with empty content).");
+                }
             }
             // OpenAI format with text instead of content
             else if (responseData.choices?.[0]?.text) {
@@ -6044,6 +8198,96 @@ function registerSettings() {
             [TACTICAL_PRESETS.SUPPORT]: game.i18n.localize(`${MODULE_ID}.presets.support`)
         },
         default: TACTICAL_PRESETS.DEFAULT,
+        requiresReload: false
+    });
+
+    // ============================================================================
+    // TACTICAL ANALYSIS SETTINGS
+    // ============================================================================
+
+    // Setting: Show Probability Analysis
+    game.settings.register(MODULE_ID, 'showProbabilityAnalysis', {
+        name: game.i18n.localize(`${MODULE_ID}.settings.showProbabilityAnalysis.name`),
+        hint: game.i18n.localize(`${MODULE_ID}.settings.showProbabilityAnalysis.hint`),
+        scope: 'world',
+        config: true,
+        type: Boolean,
+        default: true,
+        requiresReload: false
+    });
+
+    // Setting: Enable Flanking Analysis
+    game.settings.register(MODULE_ID, 'enableFlankingAnalysis', {
+        name: game.i18n.localize(`${MODULE_ID}.settings.enableFlankingAnalysis.name`),
+        hint: game.i18n.localize(`${MODULE_ID}.settings.enableFlankingAnalysis.hint`),
+        scope: 'world',
+        config: true,
+        type: Boolean,
+        default: true,
+        requiresReload: false
+    });
+
+    // Setting: Enable Combat Memory
+    game.settings.register(MODULE_ID, 'enableCombatMemory', {
+        name: game.i18n.localize(`${MODULE_ID}.settings.enableCombatMemory.name`),
+        hint: game.i18n.localize(`${MODULE_ID}.settings.enableCombatMemory.hint`),
+        scope: 'world',
+        config: true,
+        type: Boolean,
+        default: true,
+        requiresReload: false
+    });
+
+    // Setting: Enable Multi-Action Planning
+    game.settings.register(MODULE_ID, 'enableMultiActionPlanning', {
+        name: game.i18n.localize(`${MODULE_ID}.settings.enableMultiActionPlanning.name`),
+        hint: game.i18n.localize(`${MODULE_ID}.settings.enableMultiActionPlanning.hint`),
+        scope: 'world',
+        config: true,
+        type: Boolean,
+        default: false,
+        requiresReload: false
+    });
+
+    // ============================================================================
+    // PARTY COORDINATION SETTINGS (Phase 2)
+    // ============================================================================
+
+    // Setting: Enable Party Coordination
+    game.settings.register(MODULE_ID, 'enablePartyCoordination', {
+        name: game.i18n.localize(`${MODULE_ID}.settings.enablePartyCoordination.name`),
+        hint: game.i18n.localize(`${MODULE_ID}.settings.enablePartyCoordination.hint`),
+        scope: 'world',
+        config: true,
+        type: Boolean,
+        default: true,
+        requiresReload: false
+    });
+
+    // Setting: Auto-Assign Party Roles
+    game.settings.register(MODULE_ID, 'autoAssignPartyRoles', {
+        name: game.i18n.localize(`${MODULE_ID}.settings.autoAssignPartyRoles.name`),
+        hint: game.i18n.localize(`${MODULE_ID}.settings.autoAssignPartyRoles.hint`),
+        scope: 'world',
+        config: true,
+        type: Boolean,
+        default: true,
+        requiresReload: false
+    });
+
+    // Setting: Party Coordination Level
+    game.settings.register(MODULE_ID, 'partyCoordinationLevel', {
+        name: game.i18n.localize(`${MODULE_ID}.settings.partyCoordinationLevel.name`),
+        hint: game.i18n.localize(`${MODULE_ID}.settings.partyCoordinationLevel.hint`),
+        scope: 'world',
+        config: true,
+        type: String,
+        choices: {
+            'basic': game.i18n.localize(`${MODULE_ID}.settings.partyCoordinationLevel.choices.basic`),
+            'standard': game.i18n.localize(`${MODULE_ID}.settings.partyCoordinationLevel.choices.standard`),
+            'advanced': game.i18n.localize(`${MODULE_ID}.settings.partyCoordinationLevel.choices.advanced`)
+        },
+        default: 'standard',
         requiresReload: false
     });
 }
