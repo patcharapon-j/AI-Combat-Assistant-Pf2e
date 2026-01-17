@@ -6001,7 +6001,7 @@ function registerSettings() {
 /**
  * Adds AI designation controls to the combat tracker.
  * @param {CombatTracker} tracker The CombatTracker application instance.
- * @param {jQuery} html The jQuery object representing the tracker's HTML.
+ * @param {HTMLElement} html The HTML element representing the tracker (Foundry v13+).
  * @param {object} data Data used to render the tracker.
  */
 function onRenderCombatTracker(tracker, html, data) {
@@ -6012,13 +6012,16 @@ function onRenderCombatTracker(tracker, html, data) {
 
     const designations = combat.getFlag(MODULE_ID, FLAGS.DESIGNATIONS) || {};
 
-    html.find('.combatant').each((index, element) => {
-        const li = $(element);
-        const combatantId = li.data('combatant-id');
+    // Foundry v13+ passes HTMLElement instead of jQuery, handle both cases
+    const htmlElement = html instanceof jQuery ? html[0] : html;
+    const combatantElements = htmlElement.querySelectorAll('.combatant');
+
+    combatantElements.forEach((li) => {
+        const combatantId = li.dataset.combatantId;
         if (!combatantId) return;
 
         // Check if button already exists to prevent duplicates on re-render
-        if (li.find('.ai-designate-tracker-toggle-btn').length > 0) return;
+        if (li.querySelector('.ai-designate-tracker-toggle-btn')) return;
 
         const combatant = combat.combatants.get(combatantId);
         if (!combatant) return;
@@ -6040,11 +6043,14 @@ function onRenderCombatTracker(tracker, html, data) {
         `;
 
         // Append the button to the combatant controls area
-        const controlsDiv = li.find('.combatant-controls');
-        if (controlsDiv.length > 0) {
-            controlsDiv.append(buttonHtml);
+        const controlsDiv = li.querySelector('.combatant-controls');
+        if (controlsDiv) {
+            controlsDiv.insertAdjacentHTML('beforeend', buttonHtml);
             // Add listener directly after appending
-            controlsDiv.find('.ai-designate-tracker-toggle-btn').on('click', _onToggleDesignationInTrackerClick);
+            const newButton = controlsDiv.querySelector('.ai-designate-tracker-toggle-btn');
+            if (newButton) {
+                newButton.addEventListener('click', _onToggleDesignationInTrackerClick);
+            }
         } else {
             console.warn(`PF2e AI Combat Assistant | Could not find .combatant-controls for ${combatant.name}`);
         }
@@ -6060,8 +6066,8 @@ async function _onToggleDesignationInTrackerClick(event) {
     event.stopPropagation(); // Prevent other tracker events if necessary
     if (!game.user.isGM) return;
 
-    const button = $(event.currentTarget);
-    const combatantId = button.data('combatantId');
+    const button = event.currentTarget;
+    const combatantId = button.dataset.combatantId;
     const combat = game.combat; // Get current combat
 
     if (!combat || !combatantId) {
@@ -6091,15 +6097,17 @@ async function _onToggleDesignationInTrackerClick(event) {
         const buttonColor = isFriendly ? 'lightgreen' : 'salmon';
         const buttonTitle = `Toggle AI Designation (Currently: ${isFriendly ? 'Friendly' : 'Enemy'})`;
 
-        button.css('background-color', buttonColor)
-              .attr('title', buttonTitle)
-              .find('i')
-              .removeClass('fa-smile fa-skull-crossbones')
-              .addClass(iconClass);
+        button.style.backgroundColor = buttonColor;
+        button.title = buttonTitle;
+        const icon = button.querySelector('i');
+        if (icon) {
+            icon.classList.remove('fa-smile', 'fa-skull-crossbones');
+            icon.classList.add(iconClass);
+        }
 
         // Optional: Briefly highlight the change
-        button.addClass('ai-button-flash');
-        setTimeout(() => button.removeClass('ai-button-flash'), 500);
+        button.classList.add('ai-button-flash');
+        setTimeout(() => button.classList.remove('ai-button-flash'), 500);
 
     } catch (error) {
         console.error(`PF2e AI Combat Assistant | Failed to toggle designation via tracker for ${combatant.name}:`, error);
